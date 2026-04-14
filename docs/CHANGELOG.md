@@ -1,5 +1,11 @@
 # Changelog
 
+## [v1.2.1] — 2026-04-14
+
+### Changed
+- **Dropdown row (row 5)** background changed from dark navy (`1E3A5F`) to lighter blue (`2D4A7A`) so dropdowns visually stand out against the dark filter label row above.
+- **Mismatch Summary column** (Sheet 1 only): header cell is now dark red (`7F1D1D`), data cells are light red (`FEE2E2`) to highlight the correction reason at a glance.
+
 ## [v1.2.0] — 2026-04-13
 
 ### Added

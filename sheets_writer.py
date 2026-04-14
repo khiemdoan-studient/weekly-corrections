@@ -42,6 +42,9 @@ GREY_LABEL = _rgb("94A3B8")
 GREY_BORDER = _rgb("CBD5E1")
 LINK_BLUE = _rgb("93C5FD")
 ALT_ROW = _rgb("EDF2F7")
+DROPDOWN_BG = _rgb("2D4A7A")  # lighter blue for dropdown row (row 5)
+RED_HDR = _rgb("7F1D1D")  # dark red for Mismatch Summary header
+RED_LIGHT = _rgb("FEE2E2")  # light red for Mismatch Summary data cells
 
 GUIDE_URL = (
     "https://docs.google.com/document/d/1O1WEAHSttdNVRUa_CoQ3T6w4QEFPyLz5FDdM2IMHEu4"
@@ -798,7 +801,7 @@ def _format_visible_sheet(
                 ),
             )
         )
-        # Merge + format dropdown (row 4)
+        # Merge + format dropdown (row 4) — lighter blue to stand out
         fmt.append(_mg(sheet_id, 4, 5, c1, c2))
         fmt.append(
             _rc(
@@ -807,7 +810,9 @@ def _format_visible_sheet(
                 5,
                 c1,
                 c2,
-                _cf(bg=FILTER_BG, fg=WHITE, bold=True, sz=11, ha="CENTER", va="MIDDLE"),
+                _cf(
+                    bg=DROPDOWN_BG, fg=WHITE, bold=True, sz=11, ha="CENTER", va="MIDDLE"
+                ),
             )
         )
         if key in list_ranges:
@@ -830,7 +835,7 @@ def _format_visible_sheet(
             ),
         )
     )
-    # Dropdown (row 4)
+    # Dropdown (row 4) — lighter blue to stand out
     fmt.append(_mg(sheet_id, 4, 5, sc, se))
     fmt.append(
         _rc(
@@ -839,7 +844,7 @@ def _format_visible_sheet(
             5,
             sc,
             se,
-            _cf(bg=FILTER_BG, fg=WHITE, bold=True, sz=11, ha="CENTER", va="MIDDLE"),
+            _cf(bg=DROPDOWN_BG, fg=WHITE, bold=True, sz=11, ha="CENTER", va="MIDDLE"),
         )
     )
     if sort_list_key in list_ranges:
@@ -902,5 +907,31 @@ def _format_visible_sheet(
             }
         }
     )
+
+    # ── Mismatch Summary column: dark red header, light red data (Sheet 1 only) ──
+    if has_checkbox:
+        mismatch_col = nc - 1  # last column (index 13 for Sheet 1)
+        # Dark red header (row 5)
+        fmt.append(
+            _rc(
+                sheet_id,
+                5,
+                6,
+                mismatch_col,
+                mismatch_col + 1,
+                _cf(bg=RED_HDR, fg=WHITE, bold=True, sz=10, ha="CENTER", va="MIDDLE"),
+            )
+        )
+        # Light red data cells (row 6 onward)
+        fmt.append(
+            _rc(
+                sheet_id,
+                6,
+                end_row,
+                mismatch_col,
+                mismatch_col + 1,
+                _cf(bg=RED_LIGHT, sz=10),
+            )
+        )
 
     return fmt
