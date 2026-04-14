@@ -1,5 +1,10 @@
 # Changelog
 
+## [v1.2.2] — 2026-04-14
+
+### Fixed
+- **Date Approved column** (Sheet 3) now formatted as `yyyy-MM-dd HH:mm:ss`. QUERY formula strips number formatting from the hidden `_ApprovedData` tab, so a `repeatCell` with `numberFormat` is applied to column A rows 7+ on the visible sheet.
+
 ## [v1.2.1] — 2026-04-14
 
 ### Changed

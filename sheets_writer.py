@@ -692,6 +692,30 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
             }
         )
 
+    # Date format on Sheet 3 col A (QUERY strips number formatting from _ApprovedData)
+    fmt.append(
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet3_id,
+                    "startRowIndex": 6,
+                    "endRowIndex": 1006,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 1,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "numberFormat": {
+                            "type": "DATE_TIME",
+                            "pattern": "yyyy-MM-dd HH:mm:ss",
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat.numberFormat",
+            }
+        }
+    )
+
     # Checkbox data validation on Sheet 1 col A, rows 7+
     fmt.append(
         {
