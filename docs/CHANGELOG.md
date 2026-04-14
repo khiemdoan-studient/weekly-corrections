@@ -1,5 +1,18 @@
 # Changelog
 
+## [v1.2.0] — 2026-04-13
+
+### Added
+- **Sort By dropdown** on all 3 sheets — QUERY formulas wrapped with `SORT(MATCH())` matching the Student Performance Dashboard pattern. Sort options match output column order.
+- **Filter dropdowns + QUERY on Sheet 3** (Automated Correction List) — now has the same Campus/Grade/Level/Student Group/Guide Email filters as Sheets 1 and 2, plus Sort By with "Date Approved" default (descending).
+- Hidden `_ApprovedData` tab — Apps Script now appends checked corrections here; visible Sheet 3 reads from it via SORT(QUERY()) formula.
+- Sort options stored in `_Lists` columns F-H (one column per sheet).
+
+### Changed
+- **Subtitle font increased to size 12** (was 10) — caption row now more readable.
+- **User guide rewritten** — restructured with PART 1-6 sections, H2/H3 headings, bold labels ("What it shows:", "What you do:", "Tip:", etc.), matching the Claude Code Setup Guide format.
+- Apps Script now appends to hidden `_ApprovedData` instead of directly to the visible "Automated Correction List" sheet.
+
 ## [v1.1.0] — 2026-04-13
 
 ### Changed

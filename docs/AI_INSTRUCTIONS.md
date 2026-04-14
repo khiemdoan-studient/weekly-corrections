@@ -26,7 +26,8 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 ### Hidden Tabs (written by Python, never shown to users)
 - `_CorrData` — Raw MAP roster data for mismatched students (13 cols, no headers)
 - `_SISData` — Raw SIS data for same students (12 cols, no headers)
-- `_Lists` — Unique values for dropdown data validation (5 cols: campus, grade, level, student_group, guide_email)
+- `_Lists` — Unique values for filter dropdowns (cols A-E) + sort options (cols F-H, one per sheet)
+- `_ApprovedData` — Cumulative approved corrections (appended by Apps Script, read by Sheet 3 QUERY)
 
 ### Sheet 1: "Corrected Roster Info" (MAP data + checkboxes)
 | Row | Content |
@@ -34,33 +35,40 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | 1 | Title: "Corrected Roster Info" (merged, navy dark, 20pt bold white) |
 | 2 | Caption with clickable "User Guide" hyperlink (merged, navy med, italic grey) |
 | 3 | Spacer (5px, dark) |
-| 4 | Filter labels: Campus, Grade, Level, Student Group, Guide Email (merged pairs, dark) |
-| 5 | Dropdown values: All (merged pairs, teal bg, data validation from _Lists) |
+| 4 | Filter labels + "SORT BY" label (merged pairs, dark) |
+| 5 | Dropdown values + Sort By dropdown (merged pairs, teal bg, data validation from _Lists) |
 | 6 | Column headers: check, Campus, Grade, ... Mismatch Summary (navy, bold white) |
-| 7+ | QUERY formula in B7 (filtered from _CorrData), checkboxes in A7+ |
+| 7+ | SORT(QUERY()) formula in B7 (filtered + sorted from _CorrData), checkboxes in A7+ |
 
 ### Sheet 2: "Current Roster Info in SIS" (same layout, no checkboxes)
-Same title/caption/filter rows. QUERY formula in A7 pulls from `_SISData`.
+Same title/caption/filter/sort rows. SORT(QUERY()) formula in A7 pulls from `_SISData`.
 
-### Sheet 3: "Automated Correction List" (cumulative, managed by Apps Script)
-Title/caption rows, headers in row 6, data from row 7+ (appended by Apps Script).
+### Sheet 3: "Automated Correction List" (filters + QUERY from _ApprovedData)
+Same title/caption/filter/sort rows. SORT(QUERY()) formula in A7 pulls from hidden `_ApprovedData` tab. Apps Script appends checked corrections to `_ApprovedData`, and the QUERY auto-displays them. Default sort: Date Approved (descending = most recent first).
 
-## Filtering Mechanism
+## Filtering & Sorting Mechanism
 
-**Dropdowns filter via QUERY formulas — NOT Apps Script.**
+**Dropdowns filter AND sort via SORT(QUERY()) formulas — NOT Apps Script.**
 
-The QUERY formula pattern (from `sheets_builder.py`):
+The formula pattern (matching `sheets_builder.py`):
 ```
-=IFERROR(QUERY('_CorrData'!A:M, 
+=IFERROR(SORT(QUERY('_CorrData'!A:M, 
   "SELECT * WHERE 1=1"
   & IF($B$5="All", "", " AND Col1='" & $B$5 & "'")
   & IF($D$5="All", "", " AND Col2='" & $D$5 & "'")
-  ..., 0), "")
+  ..., 0),
+  MATCH($L$5, _Lists!F$2:F$14, 0),
+  IF(OR($L$5="Grade"), FALSE, TRUE)), "")
 ```
 
-When a dropdown in row 5 changes, the QUERY auto-recalculates and shows only matching rows. "All" means no filter for that field.
+- QUERY handles filtering (WHERE clauses reference dropdown cells)
+- SORT wraps QUERY output, using MATCH to find column index from Sort By dropdown
+- Sort direction: ascending (TRUE) for all text fields, descending (FALSE) for Grade and Date Approved
+- Sort options stored in `_Lists` columns F (Sheet 1), G (Sheet 2), H (Sheet 3)
 
-**Checkbox handling**: When a filter dropdown changes (row 5), the Apps Script `onEdit` clears all checkboxes in column A because the QUERY output shifts and checkboxes become stale.
+**Checkbox handling**: When a filter or Sort By dropdown changes (row 5), Apps Script clears all checkboxes in column A because the QUERY output shifts.
+
+**Sheet 3 data flow**: Apps Script appends to hidden `_ApprovedData` tab → visible Sheet 3 QUERY reads from `_ApprovedData` with filter + sort.
 
 ## Data Sources
 
