@@ -56,7 +56,7 @@ MAP_HEADER_MAP = {
     "guide_first": {"teacher 1 first name", "teacher_first"},
     "guide_last": {"teacher 1 last name", "teacher_last"},
     "guide_email": {"teacher 1 email", "teacher_email"},
-    "ext_student_id": {"suns number"},
+    "ext_student_id": {"suns number", "external student id", "suns #", "external id"},
 }
 
 # ── Output sheet tab names ──────────────────────────────────────────────────
@@ -77,19 +77,5 @@ OUTPUT_FIELDS = [
     "Guide Last Name",
     "Guide Email",
     "Student_ID",
-    "External Student ID",
-]
-
-# Comparison fields (subset of OUTPUT_FIELDS used for mismatch detection)
-COMPARE_FIELDS = [
-    "Campus",
-    "Grade",
-    "Level",
-    "First Name",
-    "Last Name",
-    "Email",
-    "Student Group",
-    "Guide Name",
-    "Guide Email",
     "External Student ID",
 ]

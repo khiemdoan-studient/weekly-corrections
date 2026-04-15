@@ -335,19 +335,29 @@ def _compute_unique_values(corrections_map, corrections_sis):
 
 
 # ── QUERY formula builders (with SORT wrapper) ───────────────────────────
+# All filter values wrapped with SUBSTITUTE(cell,"'","''") to escape single
+# quotes in student/campus names (e.g. O'Brien) that would break QUERY syntax.
+
+
+def _sq(cell):
+    """Wrap a cell reference with single-quote escaping for QUERY strings."""
+    return f'SUBSTITUTE({cell},"\'","\'\'")'
 
 
 def _build_sorted_query_sheet1(sort_list_range):
     """SORT(QUERY()) for Sheet 1. Filters in B5,D5,F5,H5,J5. Sort By in L5."""
     src = "'_CorrData'!A:M"
+    # _CorrData cols: 1=Campus 2=Grade 3=Level 4=FirstName 5=LastName
+    #   6=Email 7=StudentGroup 8=GuideFirst 9=GuideLast 10=GuideEmail
+    #   11=StudentID 12=ExtStudentID 13=MismatchSummary
     q = (
         f"=IFERROR(SORT(QUERY({src}, "
         '"SELECT * WHERE 1=1"'
-        '& IF($B$5="All", "", " AND Col1=\'" & $B$5 & "\'")'
-        '& IF($D$5="All", "", " AND Col2=\'" & $D$5 & "\'")'
-        '& IF($F$5="All", "", " AND Col3=\'" & $F$5 & "\'")'
-        '& IF($H$5="All", "", " AND Col7=\'" & $H$5 & "\'")'
-        '& IF($J$5="All", "", " AND Col10=\'" & $J$5 & "\'")'
+        f'& IF($B$5="All", "", " AND Col1=\'" & {_sq("$B$5")} & "\'")'  # Campus
+        f'& IF($D$5="All", "", " AND Col2=\'" & {_sq("$D$5")} & "\'")'  # Grade
+        f'& IF($F$5="All", "", " AND Col3=\'" & {_sq("$F$5")} & "\'")'  # Level
+        f'& IF($H$5="All", "", " AND Col7=\'" & {_sq("$H$5")} & "\'")'  # Student Group
+        f'& IF($J$5="All", "", " AND Col10=\'" & {_sq("$J$5")} & "\'")'  # Guide Email
         f", 0), MATCH($L$5, {sort_list_range}, 0), "
         'IF(OR($L$5="Grade"), FALSE, TRUE)), "")'
     )
@@ -357,14 +367,15 @@ def _build_sorted_query_sheet1(sort_list_range):
 def _build_sorted_query_sheet2(sort_list_range):
     """SORT(QUERY()) for Sheet 2. Filters in A5,C5,E5,G5,I5. Sort By in K5."""
     src = "'_SISData'!A:L"
+    # _SISData cols: same as _CorrData minus MismatchSummary (12 cols)
     q = (
         f"=IFERROR(SORT(QUERY({src}, "
         '"SELECT * WHERE 1=1"'
-        '& IF($A$5="All", "", " AND Col1=\'" & $A$5 & "\'")'
-        '& IF($C$5="All", "", " AND Col2=\'" & $C$5 & "\'")'
-        '& IF($E$5="All", "", " AND Col3=\'" & $E$5 & "\'")'
-        '& IF($G$5="All", "", " AND Col7=\'" & $G$5 & "\'")'
-        '& IF($I$5="All", "", " AND Col10=\'" & $I$5 & "\'")'
+        f'& IF($A$5="All", "", " AND Col1=\'" & {_sq("$A$5")} & "\'")'  # Campus
+        f'& IF($C$5="All", "", " AND Col2=\'" & {_sq("$C$5")} & "\'")'  # Grade
+        f'& IF($E$5="All", "", " AND Col3=\'" & {_sq("$E$5")} & "\'")'  # Level
+        f'& IF($G$5="All", "", " AND Col7=\'" & {_sq("$G$5")} & "\'")'  # Student Group
+        f'& IF($I$5="All", "", " AND Col10=\'" & {_sq("$I$5")} & "\'")'  # Guide Email
         f", 0), MATCH($K$5, {sort_list_range}, 0), "
         'IF(OR($K$5="Grade"), FALSE, TRUE)), "")'
     )
@@ -372,16 +383,20 @@ def _build_sorted_query_sheet2(sort_list_range):
 
 
 def _build_sorted_query_sheet3(sort_list_range):
-    """SORT(QUERY()) for Sheet 3. Filters in A5,C5,E5,G5,I5. Sort By in K5."""
+    """SORT(QUERY()) for Sheet 3. Filters in A5,C5,E5,G5,I5. Sort By in K5.
+    _ApprovedData cols: 1=Date 2=Campus 3=Grade 4=Level 5=FirstName 6=LastName
+      7=Email 8=StudentGroup 9=GuideFirst 10=GuideLast 11=GuideEmail
+      12=StudentID 13=ExtStudentID
+    """
     src = "'_ApprovedData'!A:M"
     q = (
         f"=IFERROR(SORT(QUERY({src}, "
         '"SELECT * WHERE 1=1"'
-        '& IF($A$5="All", "", " AND Col2=\'" & $A$5 & "\'")'  # Campus=Col2 (Col1=Date)
-        '& IF($C$5="All", "", " AND Col4=\'" & $C$5 & "\'")'  # Grade=Col4
-        '& IF($E$5="All", "", " AND Col5=\'" & $E$5 & "\'")'  # Level=Col5
-        '& IF($G$5="All", "", " AND Col9=\'" & $G$5 & "\'")'  # Student Group=Col9
-        '& IF($I$5="All", "", " AND Col12=\'" & $I$5 & "\'")'  # Guide Email=Col12
+        f'& IF($A$5="All", "", " AND Col2=\'" & {_sq("$A$5")} & "\'")'  # Campus=Col2
+        f'& IF($C$5="All", "", " AND Col3=\'" & {_sq("$C$5")} & "\'")'  # Grade=Col3
+        f'& IF($E$5="All", "", " AND Col4=\'" & {_sq("$E$5")} & "\'")'  # Level=Col4
+        f'& IF($G$5="All", "", " AND Col8=\'" & {_sq("$G$5")} & "\'")'  # StudentGroup=Col8
+        f'& IF($I$5="All", "", " AND Col11=\'" & {_sq("$I$5")} & "\'")'  # GuideEmail=Col11
         f", 0), MATCH($K$5, {sort_list_range}, 0), "
         'IF(OR($K$5="Date Approved"), FALSE, TRUE)), "")'
     )
@@ -618,28 +633,31 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         [_build_sorted_query_sheet3(list_ranges["sort3"])]
     ]
 
-    # ── Write values ──────────────────────────────────────────────────
-    for rng, val in vals_raw.items():
-        _retry_api(
-            lambda r=rng, v=val: sheets_service.spreadsheets()
-            .values()
-            .update(
-                spreadsheetId=sid, range=r, valueInputOption="RAW", body={"values": v}
-            )
-            .execute()
+    # ── Write values (batched — 2 API calls instead of 15+) ─────────
+    _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .values()
+        .batchUpdate(
+            spreadsheetId=sid,
+            body={
+                "valueInputOption": "RAW",
+                "data": [{"range": r, "values": v} for r, v in vals_raw.items()],
+            },
         )
-    for rng, val in vals_entered.items():
-        _retry_api(
-            lambda r=rng, v=val: sheets_service.spreadsheets()
-            .values()
-            .update(
-                spreadsheetId=sid,
-                range=r,
-                valueInputOption="USER_ENTERED",
-                body={"values": v},
-            )
-            .execute()
+        .execute()
+    )
+    _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .values()
+        .batchUpdate(
+            spreadsheetId=sid,
+            body={
+                "valueInputOption": "USER_ENTERED",
+                "data": [{"range": r, "values": v} for r, v in vals_entered.items()],
+            },
         )
+        .execute()
+    )
 
     # ══════════════════════════════════════════════════════════════════
     # FORMATTING

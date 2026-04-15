@@ -23,7 +23,6 @@ from config import (
     CAMPUS_SHEETS,
     MAP_HEADER_MAP,
     OUTPUT_FIELDS,
-    COMPARE_FIELDS,
 )
 from queries import query_alpha_roster
 from sheets_writer import write_corrections
@@ -132,6 +131,14 @@ def read_map_roster(sheets_service):
 
             guide_first = _safe_get(row, col_map.get("guide_first"))
             guide_last = _safe_get(row, col_map.get("guide_last"))
+
+            if student_id in students:
+                prev = students[student_id].get("Campus", "?")
+                curr = _safe_get(row, col_map.get("campus"))
+                print(
+                    f"    WARNING: Duplicate student_id {student_id} "
+                    f"(prev={prev}, now={curr} in {sheet_name})"
+                )
 
             students[student_id] = {
                 "Campus": _safe_get(row, col_map.get("campus")),

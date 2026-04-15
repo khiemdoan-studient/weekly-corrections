@@ -113,8 +113,19 @@ The formula pattern (matching `sheets_builder.py`):
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| textFormatRun index error | "User Guide" at end of string, trailing run index = len(text) | Only add trailing run if `link_end < len(text)` |
+| QUERY returns error when name has apostrophe | Single quotes in values (O'Brien) break QUERY string | `_sq()` wraps cell refs with `SUBSTITUTE(cell,"'","''")` |
+| Sheet 3 filters show wrong students | `_ApprovedData` has Date in Col1, shifting all cols by 1 | Fixed: Grade=Col3, Level=Col4, StudentGroup=Col8, GuideEmail=Col11 |
+| Date Approved shows serial number (46126.5) | QUERY strips number formatting from source | `repeatCell` with `numberFormat` DATE_TIME on Sheet 3 col A |
+| textFormatRun index error | "User Guide" at end of string | Only add trailing run if `link_end < len(text)` |
 | addBanding error on re-run | Existing banding not cleared | `_clear_banding()` runs before formatting |
 | CTAS fails with "mismatched input 'group'" | Reserved word quotes stripped by shell | Read SQL from file, pass via `--cli-input-json` |
 | Campus shows 0 enrolled | Notes column at different index | Header auto-detection via `MAP_HEADER_MAP` |
 | Dropdown doesn't filter | Using Apps Script hideRows instead of QUERY | Rewrote to use QUERY formulas referencing dropdown cells |
+| Slow writes (~35s) | 15+ individual API calls for value ranges | Batched into 2 calls via `values().batchUpdate()` (~16s) |
+| Duplicate student IDs silently overwritten | Same ID in multiple campus sheets | Warning logged; last-write-wins preserved |
+
+## Known Limitations
+
+- **Grade sorts lexicographically** — "10" sorts before "2" because QUERY treats grades as text. Numeric sorting would require a helper column.
+- **`_ApprovedData` grows indefinitely** — No automatic pruning. Manual cleanup needed periodically.
+- **`admissionstatus` not surfaced** — SIS students with non-Enrolled status still show field-level mismatches rather than a clear "WITHDRAWN IN SIS" flag.

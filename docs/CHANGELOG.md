@@ -1,5 +1,19 @@
 # Changelog
 
+## [v1.3.0] — 2026-04-14
+
+### Fixed (Critical)
+- **Single-quote injection in QUERY formulas** — Student or campus names containing apostrophes (e.g., O'Brien, St. Mary's) broke all three SORT(QUERY()) formulas. All filter cell references now wrapped with `SUBSTITUTE(cell,"'","''")` to escape single quotes in QUERY string literals.
+- **Sheet 3 QUERY column references off by one** — `_ApprovedData` has Date in Col1, shifting all data columns. Grade was Col4 (should be Col3), Level was Col5 (should be Col4), Student Group was Col9 (should be Col8), Guide Email was Col12 (should be Col11). All corrected.
+
+### Fixed (Medium)
+- **Duplicate student ID warnings** — `read_map_roster()` now logs a warning when the same `student_id` appears in multiple campus sheets (6 duplicates found in Hardeeville). Last-write-wins behavior preserved but now visible.
+- **Dead code removed** — `COMPARE_FIELDS` was defined in `config.py` and imported but never used in comparison logic. Removed from both files.
+
+### Improved
+- **API write batching** — Visible sheet values (titles, labels, headers, formulas) now written in 2 batched API calls via `values().batchUpdate()` instead of 15+ individual `values().update()` calls. Runtime reduced from ~35s to ~16s.
+- **External Student ID header detection expanded** — `MAP_HEADER_MAP["ext_student_id"]` now matches "suns number", "external student id", "suns #", and "external id" (was only "suns number").
+
 ## [v1.2.2] — 2026-04-14
 
 ### Fixed
