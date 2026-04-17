@@ -536,20 +536,14 @@ def _clear_conditional_format_rules(sheets_service, spreadsheet_id, sheet_ids):
 
 
 def _migrate_cumulative_tabs(sheets_service, spreadsheet_id):
-    """One-time migration: fix corrupted rows and add MismatchSummary column.
-
-    v2.1.0 bug: old Apps Script read from col 2 (Reject checkbox) instead of
-    col 3, inserting FALSE as first data value and losing ExtStudentID.
+    """Content-based migration: realign corrupted rows using email position.
 
     Target format (14 cols): Date, MismatchSummary, Campus, Grade, Level,
     FirstName, LastName, Email, StudentGroup, GuideFirst, GuideLast,
     GuideEmail, StudentID, ExtStudentID
 
-    Migration cases per row:
-    - 13 cols with col[1]="FALSE"/"TRUE": corrupted → remove col[1], insert
-      "" for MismatchSummary, append "" for lost ExtStudentID → 14 cols
-    - 13 cols (old v2.0.0 format): insert "" for MismatchSummary at [1] → 14
-    - 14 cols: already migrated, skip
+    Strategy: find the student email (@2hourlearning.com) which must be at
+    index 7 in the correct layout. Compute the shift and realign.
     """
     cumulative_tabs = [
         "_ApprovedData",
@@ -569,41 +563,18 @@ def _migrate_cumulative_tabs(sheets_service, spreadsheet_id):
         if not rows:
             continue
 
-        # Check if migration is needed (any row not 14 cols)
-        needs_migration = any(len(r) != 14 for r in rows)
-        if not needs_migration:
-            continue
-
-        print(f"  Migrating {tab_name}: {len(rows)} rows...")
         migrated = []
         fixed = 0
         for row in rows:
-            # Pad short rows
-            while len(row) < 2:
-                row.append("")
-
-            if len(row) == 14:
-                # Already correct format
-                migrated.append(row)
-            elif len(row) == 13 and str(row[1]).upper() in ("FALSE", "TRUE"):
-                # Corrupted: [date, FALSE/TRUE, campus, grade, ..., studentID]
-                # Remove the FALSE/TRUE, insert "" for MismatchSummary, append "" for lost ExtStudentID
-                date_val = row[0]
-                data = row[2:]  # campus through studentID (11 values)
-                migrated.append([date_val, ""] + data + [""])
+            result = _realign_row(row)
+            if result != row or len(row) != 14:
                 fixed += 1
-            elif len(row) == 13:
-                # Old v2.0.0 format: [date, campus, grade, ..., extStudentID]
-                # Insert "" for MismatchSummary after date
-                migrated.append([row[0], ""] + row[1:])
-            else:
-                # Unknown format — pad or truncate to 14
-                while len(row) < 14:
-                    row.append("")
-                migrated.append(row[:14])
-                fixed += 1
+            migrated.append(result)
 
-        # Clear and rewrite
+        if fixed == 0:
+            continue
+
+        print(f"  Migrating {tab_name}: {fixed}/{len(rows)} rows realigned...")
         _retry_api(
             lambda t=tab_name: sheets_service.spreadsheets()
             .values()
@@ -622,7 +593,52 @@ def _migrate_cumulative_tabs(sheets_service, spreadsheet_id):
                 )
                 .execute()
             )
-        print(f"    {len(migrated)} rows migrated ({fixed} corrupted rows fixed)")
+
+
+def _realign_row(row):
+    """Realign a single cumulative-tab row to 14-col format.
+
+    Uses student email (@2hourlearning) as anchor — it must be at index 7.
+    Falls back to guide email (@) patterns if student email not found.
+    """
+    TARGET_EMAIL_IDX = 7
+    TARGET_COLS = 14
+
+    # Find student email index (contains "2hourlearning")
+    email_idx = None
+    for i, val in enumerate(row):
+        if isinstance(val, str) and "2hourlearning" in val.lower():
+            email_idx = i
+            break
+
+    if email_idx is None:
+        # No student email found — pad/truncate to 14 with blank MismatchSummary
+        if len(row) < 2:
+            return [""] * TARGET_COLS
+        result = [row[0], ""] + list(row[1:])
+        while len(result) < TARGET_COLS:
+            result.append("")
+        return result[:TARGET_COLS]
+
+    shift = email_idx - TARGET_EMAIL_IDX
+
+    if shift > 0:
+        # Too many values before email — remove extras after date
+        fixed = [row[0]] + list(row[1 + shift :])
+    elif shift < 0:
+        # Too few values before email — insert blanks after date
+        fixed = [row[0]] + [""] * (-shift) + list(row[1:])
+    else:
+        fixed = list(row)
+
+    # Clean up: replace FALSE/TRUE in MismatchSummary slot with ""
+    if len(fixed) > 1 and str(fixed[1]).upper() in ("FALSE", "TRUE"):
+        fixed[1] = ""
+
+    # Pad or truncate to 14
+    while len(fixed) < TARGET_COLS:
+        fixed.append("")
+    return fixed[:TARGET_COLS]
 
 
 # ══════════════════════════════════════════════════════════════════════════
