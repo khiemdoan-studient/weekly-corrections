@@ -563,11 +563,20 @@ def _migrate_cumulative_tabs(sheets_service, spreadsheet_id):
         if not rows:
             continue
 
+        # Quick skip: if every row has email at index 7, no migration needed.
+        # (Sheets API strips trailing empty strings, so len<14 is normal post-migration.)
+        all_aligned = all(
+            len(r) > 7 and isinstance(r[7], str) and "2hourlearning" in r[7].lower()
+            for r in rows
+        )
+        if all_aligned:
+            continue
+
         migrated = []
         fixed = 0
         for row in rows:
             result = _realign_row(row)
-            if result != row or len(row) != 14:
+            if result != row:
                 fixed += 1
             migrated.append(result)
 
@@ -649,6 +658,32 @@ def _backfill_mismatch_summary(sheets_service, spreadsheet_id):
     For _UnenrollData, type is always "Unenrolling".
     For _ApprovedData and _RejectedData, look up by StudentID.
     """
+    # Backfill each cumulative tab
+    backfill_map = {
+        "_ApprovedData": None,  # lookup from _CorrData
+        "_AdditionsData": "Roster Addition",  # always this type
+        "_UnenrollData": "Unenrolling",  # always this type
+        "_RejectedData": None,  # lookup from _CorrData
+    }
+
+    # First pass: check if any tab needs backfill (skip _CorrData read if all are filled)
+    tab_rows = {}
+    any_needs_backfill = False
+    for tab_name in backfill_map:
+        resp = _retry_api(
+            lambda t=tab_name: sheets_service.spreadsheets()
+            .values()
+            .get(spreadsheetId=spreadsheet_id, range=f"'{t}'!A:N")
+            .execute()
+        )
+        rows = resp.get("values", [])
+        tab_rows[tab_name] = rows
+        if any(len(r) > 1 and not str(r[1]).strip() for r in rows):
+            any_needs_backfill = True
+
+    if not any_needs_backfill:
+        return
+
     # Build lookup: student_id -> mismatch_summary from _CorrData
     resp = _retry_api(
         lambda: sheets_service.spreadsheets()
@@ -665,22 +700,8 @@ def _backfill_mismatch_summary(sheets_service, spreadsheet_id):
             if sid and mismatch:
                 lookup[sid] = mismatch
 
-    # Backfill each cumulative tab
-    backfill_map = {
-        "_ApprovedData": None,  # lookup from _CorrData
-        "_AdditionsData": "Roster Addition",  # always this type
-        "_UnenrollData": "Unenrolling",  # always this type
-        "_RejectedData": None,  # lookup from _CorrData
-    }
-
     for tab_name, fixed_type in backfill_map.items():
-        resp = _retry_api(
-            lambda t=tab_name: sheets_service.spreadsheets()
-            .values()
-            .get(spreadsheetId=spreadsheet_id, range=f"'{t}'!A:N")
-            .execute()
-        )
-        rows = resp.get("values", [])
+        rows = tab_rows[tab_name]
         if not rows:
             continue
 
