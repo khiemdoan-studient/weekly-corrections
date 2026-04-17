@@ -40,10 +40,13 @@ text = (
     "Information System) does not match the MAP roster. Implementation Managers review these "
     "mismatches weekly, check off corrections, and the data team submits the changes every Friday.\n"
     "\n"
-    "The spreadsheet has three sheets:\n"
+    "The spreadsheet has five sheets:\n"
     "\u2022 Corrected Roster Info \u2014 What the data should be (from the MAP roster)\n"
     "\u2022 Current Roster Info in SIS \u2014 What the SIS currently has (for comparison)\n"
-    "\u2022 Automated Correction List \u2014 Running history of approved corrections\n"
+    "\u2022 Automated Correction List \u2014 Running history of approved field-mismatch corrections\n"
+    "\u2022 Roster Additions \u2014 Running history of approved new student enrollments\n"
+    "\u2022 Roster Unenrollments \u2014 Running history of approved student unenrollments\n"
+    "\u2022 Rejected Changes \u2014 Running history of rejected corrections with reason column\n"
     "\n"
     "PART 1: HOW TO REVIEW CORRECTIONS\n"
     "\n"
@@ -61,10 +64,13 @@ text = (
     "\u201cMismatch Summary,\u201d tells you exactly which fields are different (e.g., \u201cCampus, Grade\u201d "
     "or \u201cGuide Email, Guide Name\u201d).\n"
     "\n"
-    "Step 3: Check off corrections\n"
-    "If the MAP roster data (Sheet 1) is correct and should replace the SIS data (Sheet 2), "
-    "check the checkbox in column A. The student automatically appears in the Automated "
-    "Correction List (Sheet 3) with today\u2019s date.\n"
+    "Step 3: Accept or reject corrections\n"
+    "Each row has two checkboxes: Accept Changes (column A, green) and Reject Changes (column B, red).\n"
+    "\u2022 Accept \u2014 Check column A if the MAP roster data is correct and should replace the SIS data. "
+    "The student automatically appears in the appropriate approval sheet with today\u2019s date.\n"
+    "\u2022 Reject \u2014 Check column B if the correction should NOT be applied. "
+    "The student appears in the Rejected Changes sheet where you can add a reason.\n"
+    "Checking one automatically unchecks the other.\n"
     "\n"
     "Important: Do not check boxes for students outside your campus. Only check corrections for "
     "schools you manage.\n"
@@ -73,9 +79,12 @@ text = (
     "\n"
     "Corrected Roster Info\n"
     "What it shows: MAP roster data (source of truth) for students whose information doesn\u2019t "
-    "match the SIS.\n"
-    "What you do: Review the data, check the checkbox in column A if the correction is valid.\n"
-    "Mismatch Summary: The last column lists which specific fields differ between MAP and SIS.\n"
+    "match the SIS. The Mismatch Summary column is color-coded:\n"
+    "\u2022 Green \u2014 Roster Addition (student is enrolled in MAP but not yet in the SIS)\n"
+    "\u2022 Yellow \u2014 Field mismatch (student exists in both but specific fields differ)\n"
+    "\u2022 Light yellow \u2014 Unenrolling (student is no longer enrolled in MAP but still enrolled in SIS)\n"
+    "What you do: Review the data. Check Accept Changes (column A, green) to approve, or "
+    "Reject Changes (column B, red) to reject. Your choice is automatically routed to the correct sheet.\n"
     "\n"
     "Current Roster Info in SIS\n"
     "What it shows: What the SIS pipeline currently has for the same students.\n"
@@ -83,9 +92,21 @@ text = (
     "Note: Both sheets show the same students in the same row order for easy comparison.\n"
     "\n"
     "Automated Correction List\n"
-    "What it shows: A running list of all approved corrections with the date each was checked off.\n"
+    "What it shows: A running list of approved field-mismatch corrections with the date each was checked off.\n"
     "What you do: This sheet is read-only for IMs. The data team uses it every Friday.\n"
     "Note: This list is cumulative \u2014 it keeps a full history and is never cleared automatically.\n"
+    "\n"
+    "Roster Additions\n"
+    "What it shows: A running list of approved new student enrollments (students in MAP not yet in SIS).\n"
+    "What you do: Read-only for IMs. The data team processes new enrollments every Friday.\n"
+    "\n"
+    "Roster Unenrollments\n"
+    "What it shows: A running list of approved student unenrollments (students no longer enrolled in MAP but still in SIS).\n"
+    "What you do: Read-only for IMs. The data team processes unenrollments every Friday.\n"
+    "\n"
+    "Rejected Changes\n"
+    "What it shows: A running list of rejected corrections with the date and a Reason for Rejection column.\n"
+    "What you do: After rejecting a row on Sheet 1, go to this sheet and optionally add a reason in the last column.\n"
     "\n"
     "PART 3: DROPDOWN FILTERS AND SORTING\n"
     "\n"
@@ -105,7 +126,7 @@ text = (
     "Each sheet also has a Sort By dropdown (to the right of the filters).\n"
     "\u2022 Choose any column name to sort the data by that field\n"
     "\u2022 Text fields sort A\u2192Z (ascending)\n"
-    "\u2022 Default sort: Campus for Sheets 1 and 2, Date Approved for Sheet 3\n"
+    "\u2022 Default sort: Campus for Sheets 1 and 2, Date Approved for Sheets 3, 4, and 5\n"
     "\n"
     "Important: Changing a filter or sort option on Sheet 1 automatically clears all checkboxes, "
     "because the visible rows change. Always set your filters first, then check boxes.\n"
@@ -117,8 +138,8 @@ text = (
     "compare with the SIS sheet, and check off corrections that need to be made.\n"
     "\n"
     "Friday\n"
-    "The data team copies the Automated Correction List (Sheet 3) and sends it to the support "
-    "team to update the SIS. The corrections are then applied in the student information system.\n"
+    "The data team reviews all three approval sheets (Automated Correction List, Roster Additions, "
+    "Roster Unenrollments) and sends them to the support team to update the SIS.\n"
     "\n"
     "Automatic refresh\n"
     "The mismatch data refreshes automatically when the dashboard pipeline runs. New mismatches "
@@ -155,14 +176,17 @@ text = (
     "The corrections sheet refreshes when the data pipeline runs. Contact Khiem Doan if data "
     "appears outdated.\n"
     "\n"
-    "\u201cMy approved correction isn\u2019t in Sheet 3\u201d\n"
-    "Make sure you checked the actual checkbox (not just clicked the cell). The checkbox must "
-    "show a checkmark. Also verify the Apps Script is installed (Extensions > Apps Script should "
-    "show the onEdit code).\n"
+    "\u201cMy approved correction isn\u2019t in the right sheet\u201d\n"
+    "Corrections are automatically routed based on the Mismatch Summary type: field mismatches go "
+    "to Automated Correction List, Roster Additions go to the Roster Additions sheet, and "
+    "Unenrolling goes to the Roster Unenrollments sheet. Make sure you checked the actual checkbox "
+    "(not just clicked the cell). Also verify the Apps Script is installed (Extensions > Apps Script "
+    "should show the onEdit code).\n"
     "\n"
     "\u201cI see a student in Sheet 1 but not Sheet 2\u201d\n"
     "The student exists in the MAP roster but was not found in the SIS at all. Sheet 2 will "
-    "show \u201cNOT FOUND IN SIS\u201d for that student.\n"
+    "show \u201cNOT FOUND IN SIS\u201d for that student. The Mismatch Summary will say \u201cRoster Addition\u201d "
+    "(highlighted green).\n"
 )
 
 requests.append({"insertText": {"location": {"index": 1}, "text": text}})
@@ -225,10 +249,13 @@ for title in [
 for title in [
     "Step 1: Open the spreadsheet and set your filters",
     "Step 2: Compare the two sheets side by side",
-    "Step 3: Check off corrections",
+    "Step 3: Accept or reject corrections",
     "Corrected Roster Info",
     "Current Roster Info in SIS",
     "Automated Correction List",
+    "Roster Additions",
+    "Roster Unenrollments",
+    "Rejected Changes",
     "Filter Dropdowns",
     "Sort By Dropdown",
     "Monday through Thursday",
@@ -281,7 +308,7 @@ for issue in [
     "\u201cI don\u2019t see my campus in the dropdown\u201d",
     "\u201cCheckboxes disappeared after changing a filter\u201d",
     "\u201cThe data looks stale\u201d",
-    "\u201cMy approved correction isn\u2019t in Sheet 3\u201d",
+    "\u201cMy approved correction isn\u2019t in the right sheet\u201d",
     "\u201cI see a student in Sheet 1 but not Sheet 2\u201d",
 ]:
     i = text.find(issue)

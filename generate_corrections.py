@@ -55,16 +55,20 @@ def _detect_columns(header_row):
 
 
 def read_map_roster(sheets_service):
-    """Read enrolled students from all MAP roster campus sheets.
+    """Read students from all MAP roster campus sheets.
 
     Auto-detects column layout per sheet from row 1 headers, so sheets with
     different schemas (e.g. Reading CCSD has extra 'Full Name' column) are
     handled automatically.
 
-    Returns a dict keyed by student_id with normalized field values.
+    Returns:
+        (enrolled, non_enrolled) — two dicts keyed by student_id.
+        enrolled = students with Notes == "Enrolled"
+        non_enrolled = students with any other Notes value
     """
     print_step("1. READING MAP ROSTER")
-    students = {}
+    students_enrolled = {}
+    students_non_enrolled = {}
     skipped_sheets = []
 
     for sheet_name in CAMPUS_SHEETS:
@@ -116,31 +120,23 @@ def read_map_roster(sheets_service):
         num_cols = len(header_row)
 
         enrolled_count = 0
+        non_enrolled_count = 0
         for row in data_rows:
             # Pad row
             while len(row) < num_cols:
                 row.append("")
 
             notes = _safe_get(row, col_map.get("notes")).strip()
-            if notes.lower() != "enrolled":
-                continue
-
             student_id = _safe_get(row, col_map.get("student_id")).strip()
             if not student_id:
+                continue
+            if not notes:
                 continue
 
             guide_first = _safe_get(row, col_map.get("guide_first"))
             guide_last = _safe_get(row, col_map.get("guide_last"))
 
-            if student_id in students:
-                prev = students[student_id].get("Campus", "?")
-                curr = _safe_get(row, col_map.get("campus"))
-                print(
-                    f"    WARNING: Duplicate student_id {student_id} "
-                    f"(prev={prev}, now={curr} in {sheet_name})"
-                )
-
-            students[student_id] = {
+            record = {
                 "Campus": _safe_get(row, col_map.get("campus")),
                 "Grade": _safe_get(row, col_map.get("grade")),
                 "Level": _safe_get(row, col_map.get("level")),
@@ -155,17 +151,33 @@ def read_map_roster(sheets_service):
                 "External Student ID": _safe_get(row, col_map.get("ext_student_id")),
                 "Guide Name": _combine_name(guide_first, guide_last),
             }
-            enrolled_count += 1
+
+            if notes.lower() == "enrolled":
+                if student_id in students_enrolled:
+                    prev = students_enrolled[student_id].get("Campus", "?")
+                    curr = record["Campus"]
+                    print(
+                        f"    WARNING: Duplicate student_id {student_id} "
+                        f"(prev={prev}, now={curr} in {sheet_name})"
+                    )
+                students_enrolled[student_id] = record
+                enrolled_count += 1
+            else:
+                students_non_enrolled[student_id] = record
+                non_enrolled_count += 1
 
         print(
-            f"  {sheet_name}: {enrolled_count} enrolled (Notes=col {notes_col_letter}, {num_cols} cols)"
+            f"  {sheet_name}: {enrolled_count} enrolled, {non_enrolled_count} non-enrolled "
+            f"(Notes=col {notes_col_letter}, {num_cols} cols)"
         )
 
     if skipped_sheets:
         print(f"\n  WARNING: Skipped sheets: {', '.join(skipped_sheets)}")
 
-    print(f"\n  Total MAP roster students: {len(students):,}")
-    return students
+    print(
+        f"\n  Total MAP roster: {len(students_enrolled):,} enrolled, {len(students_non_enrolled):,} non-enrolled"
+    )
+    return students_enrolled, students_non_enrolled
 
 
 def _safe_get(row, idx):
@@ -236,8 +248,13 @@ def _split_name(full_name):
 # ── Comparison Engine ──────────────────────────────────────────────────────
 
 
-def compare_students(map_students, sis_students):
+def compare_students(map_enrolled, map_non_enrolled, sis_students):
     """Compare MAP roster against SIS data, return mismatched students.
+
+    Three mismatch categories:
+    1. "Roster Addition" — student Enrolled in MAP, not found in SIS at all
+    2. Field mismatches — student Enrolled in both, fields differ (e.g. "Grade, Email")
+    3. "Unenrolling" — student NOT Enrolled in MAP, but Enrolled in SIS
 
     Returns:
         (corrections_map, corrections_sis) — parallel lists of dicts for
@@ -248,21 +265,24 @@ def compare_students(map_students, sis_students):
     corrections_map = []
     corrections_sis = []
     match_count = 0
-    not_in_sis = 0
+    roster_addition_count = 0
+    field_mismatch_count = 0
+    unenroll_count = 0
 
-    for student_id, map_rec in sorted(map_students.items()):
+    # ── Enrolled MAP students vs SIS ──────────────────────────────────
+    for student_id, map_rec in sorted(map_enrolled.items()):
         sis_rec = sis_students.get(student_id)
 
         if sis_rec is None:
-            # Student in MAP but not in SIS
+            # Student enrolled in MAP but not in SIS → Roster Addition
             map_rec_copy = dict(map_rec)
-            map_rec_copy["mismatch_summary"] = "NOT IN SIS"
+            map_rec_copy["mismatch_summary"] = "Roster Addition"
             corrections_map.append(map_rec_copy)
 
             sis_placeholder = {field: "NOT FOUND IN SIS" for field in OUTPUT_FIELDS}
             sis_placeholder["Student_ID"] = student_id
             corrections_sis.append(sis_placeholder)
-            not_in_sis += 1
+            roster_addition_count += 1
             continue
 
         # Compare fields
@@ -273,12 +293,29 @@ def compare_students(map_students, sis_students):
             map_rec_copy["mismatch_summary"] = ", ".join(mismatches)
             corrections_map.append(map_rec_copy)
             corrections_sis.append(dict(sis_rec))
+            field_mismatch_count += 1
         else:
             match_count += 1
 
+    # ── Non-enrolled MAP students vs SIS (unenrolling detection) ──────
+    for student_id, map_rec in sorted(map_non_enrolled.items()):
+        sis_rec = sis_students.get(student_id)
+        if sis_rec is None:
+            continue  # not in SIS either — nothing to flag
+        if sis_rec.get("admissionstatus", "").strip().lower() != "enrolled":
+            continue  # not enrolled in SIS — no conflict
+
+        # Student not enrolled in MAP but enrolled in SIS → Unenrolling
+        map_rec_copy = dict(map_rec)
+        map_rec_copy["mismatch_summary"] = "Unenrolling"
+        corrections_map.append(map_rec_copy)
+        corrections_sis.append(dict(sis_rec))
+        unenroll_count += 1
+
     print(f"  Matches (no correction needed): {match_count:,}")
-    print(f"  Mismatches found: {len(corrections_map) - not_in_sis:,}")
-    print(f"  Not in SIS: {not_in_sis:,}")
+    print(f"  Roster Additions (not in SIS): {roster_addition_count:,}")
+    print(f"  Field mismatches: {field_mismatch_count:,}")
+    print(f"  Unenrolling: {unenroll_count:,}")
     print(f"  Total corrections: {len(corrections_map):,}")
 
     return corrections_map, corrections_sis
@@ -341,11 +378,13 @@ def main():
     sheets_service = build("sheets", "v4", credentials=creds)
 
     # Read data from both sources
-    map_students = read_map_roster(sheets_service)
+    map_enrolled, map_non_enrolled = read_map_roster(sheets_service)
     sis_students = read_sis_data(bq_client)
 
     # Compare and find mismatches
-    corrections_map, corrections_sis = compare_students(map_students, sis_students)
+    corrections_map, corrections_sis = compare_students(
+        map_enrolled, map_non_enrolled, sis_students
+    )
 
     # Write to output spreadsheet
     print_step("4. WRITING TO CORRECTIONS SPREADSHEET")

@@ -1,6 +1,6 @@
 """Google Sheets API writer for the Weekly Corrections tool.
 
-Layout (all 3 visible sheets):
+Layout (all 6 visible sheets):
   Row 1: Title (merged, navy dark, 20pt bold white)
   Row 2: Caption with User Guide hyperlink (merged, navy med, italic 12pt grey)
   Row 3: Spacer (5px, dark)
@@ -8,6 +8,14 @@ Layout (all 3 visible sheets):
   Row 5: Dropdown values + Sort By dropdown (merged pairs, teal bg, data validation)
   Row 6: Column headers (navy, bold white)
   Row 7+: SORT(QUERY(...)) formula output (filtered + sorted from hidden data tabs)
+
+Visible sheets:
+  1. Corrected Roster Info    — accept/reject + QUERY from _CorrData (all mismatch types)
+  2. Current Roster Info in SIS — QUERY from _SISData
+  3. Automated Correction List — QUERY from _ApprovedData (field mismatches)
+  4. Roster Additions          — QUERY from _AdditionsData
+  5. Roster Unenrollments      — QUERY from _UnenrollData
+  6. Rejected Changes          — QUERY from _RejectedData + Reason for Rejection
 
 Filtering and sorting both done by formulas — NOT by Apps Script.
 """
@@ -19,6 +27,9 @@ from config import (
     TAB_CORRECTED,
     TAB_SIS,
     TAB_APPROVED,
+    TAB_ADDITIONS,
+    TAB_UNENROLL,
+    TAB_REJECTED,
     OUTPUT_FIELDS,
 )
 
@@ -44,7 +55,11 @@ LINK_BLUE = _rgb("93C5FD")
 ALT_ROW = _rgb("EDF2F7")
 DROPDOWN_BG = _rgb("2D4A7A")  # lighter blue for dropdown row (row 5)
 RED_HDR = _rgb("7F1D1D")  # dark red for Mismatch Summary header
-RED_LIGHT = _rgb("FEE2E2")  # light red for Mismatch Summary data cells
+GREEN_LIGHT = _rgb("D4EDDA")  # light green for Roster Addition
+YELLOW_MM = _rgb("FFF3CD")  # yellow for field mismatches
+YELLOW_LIGHT = _rgb("FFFDE7")  # light yellow for Unenrolling
+ACCEPT_BG = _rgb("D4EDDA")  # light green for Accept Changes column
+REJECT_BG = _rgb("FEE2E2")  # light red for Reject Changes column
 
 GUIDE_URL = (
     "https://docs.google.com/document/d/1O1WEAHSttdNVRUa_CoQ3T6w4QEFPyLz5FDdM2IMHEu4"
@@ -86,8 +101,27 @@ SORT_OPTS_SHEET2 = [  # _SISData 12 cols
     "Student_ID",
     "External Student ID",
 ]
-SORT_OPTS_SHEET3 = [  # _ApprovedData 13 cols
+SORT_OPTS_SHEET3 = [  # _ApprovedData 14 cols
     "Date Approved",
+    "Mismatch Summary",
+    "Campus",
+    "Grade",
+    "Level",
+    "First Name",
+    "Last Name",
+    "Email",
+    "Student Group",
+    "Guide First Name",
+    "Guide Last Name",
+    "Guide Email",
+    "Student_ID",
+    "External Student ID",
+]
+SORT_OPTS_SHEET4 = list(SORT_OPTS_SHEET3)  # _AdditionsData — same layout
+SORT_OPTS_SHEET5 = list(SORT_OPTS_SHEET3)  # _UnenrollData — same layout
+SORT_OPTS_SHEET6 = [  # _RejectedData 14 cols
+    "Date Rejected",
+    "Mismatch Summary",
     "Campus",
     "Grade",
     "Level",
@@ -116,27 +150,35 @@ def _retry_api(fn, max_retries=3, delay=5):
             time.sleep(delay * (attempt + 1))
 
 
-def _ensure_tab_exists(sheets_service, spreadsheet_id, tab_name):
+def _ensure_all_tabs(sheets_service, spreadsheet_id, tab_names):
+    """Ensure all tabs exist in a single batched API call. Returns dict of name -> sheetId."""
     resp = _retry_api(
         lambda: sheets_service.spreadsheets()
         .get(spreadsheetId=spreadsheet_id, fields="sheets.properties")
         .execute()
     )
+    existing = {}
     for sheet in resp.get("sheets", []):
         props = sheet["properties"]
-        if props["title"] == tab_name:
-            return props["sheetId"]
-    result = _retry_api(
-        lambda: sheets_service.spreadsheets()
-        .batchUpdate(
-            spreadsheetId=spreadsheet_id,
-            body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
+        existing[props["title"]] = props["sheetId"]
+
+    missing = [name for name in tab_names if name not in existing]
+    if missing:
+        requests = [{"addSheet": {"properties": {"title": name}}} for name in missing]
+        result = _retry_api(
+            lambda: sheets_service.spreadsheets()
+            .batchUpdate(spreadsheetId=spreadsheet_id, body={"requests": requests})
+            .execute()
         )
-        .execute()
-    )
-    sheet_id = result["replies"][0]["addSheet"]["properties"]["sheetId"]
-    print(f"     Created tab '{tab_name}' (sheetId={sheet_id})")
-    return sheet_id
+        for reply in result.get("replies", []):
+            if "addSheet" in reply:
+                props = reply["addSheet"]["properties"]
+                existing[props["title"]] = props["sheetId"]
+                print(
+                    f"     Created tab '{props['title']}' (sheetId={props['sheetId']})"
+                )
+
+    return {name: existing[name] for name in tab_names}
 
 
 def _clear_banding(sheets_service, spreadsheet_id, sheet_ids):
@@ -345,7 +387,8 @@ def _sq(cell):
 
 
 def _build_sorted_query_sheet1(sort_list_range):
-    """SORT(QUERY()) for Sheet 1. Filters in B5,D5,F5,H5,J5. Sort By in L5."""
+    """SORT(QUERY()) for Sheet 1. Filters in C5,E5,G5,I5,K5. Sort By in M5.
+    (Offset by 2 for accept/reject checkbox columns A-B.)"""
     src = "'_CorrData'!A:M"
     # _CorrData cols: 1=Campus 2=Grade 3=Level 4=FirstName 5=LastName
     #   6=Email 7=StudentGroup 8=GuideFirst 9=GuideLast 10=GuideEmail
@@ -353,13 +396,13 @@ def _build_sorted_query_sheet1(sort_list_range):
     q = (
         f"=IFERROR(SORT(QUERY({src}, "
         '"SELECT * WHERE 1=1"'
-        f'& IF($B$5="All", "", " AND Col1=\'" & {_sq("$B$5")} & "\'")'  # Campus
-        f'& IF($D$5="All", "", " AND Col2=\'" & {_sq("$D$5")} & "\'")'  # Grade
-        f'& IF($F$5="All", "", " AND Col3=\'" & {_sq("$F$5")} & "\'")'  # Level
-        f'& IF($H$5="All", "", " AND Col7=\'" & {_sq("$H$5")} & "\'")'  # Student Group
-        f'& IF($J$5="All", "", " AND Col10=\'" & {_sq("$J$5")} & "\'")'  # Guide Email
-        f", 0), MATCH($L$5, {sort_list_range}, 0), "
-        'IF(OR($L$5="Grade"), FALSE, TRUE)), "")'
+        f'& IF($C$5="All", "", " AND Col1=\'" & {_sq("$C$5")} & "\'")'  # Campus
+        f'& IF($E$5="All", "", " AND Col2=\'" & {_sq("$E$5")} & "\'")'  # Grade
+        f'& IF($G$5="All", "", " AND Col3=\'" & {_sq("$G$5")} & "\'")'  # Level
+        f'& IF($I$5="All", "", " AND Col7=\'" & {_sq("$I$5")} & "\'")'  # Student Group
+        f'& IF($K$5="All", "", " AND Col10=\'" & {_sq("$K$5")} & "\'")'  # Guide Email
+        f", 0), MATCH($M$5, {sort_list_range}, 0), "
+        'IF(OR($M$5="Grade"), FALSE, TRUE)), "")'
     )
     return q
 
@@ -384,23 +427,202 @@ def _build_sorted_query_sheet2(sort_list_range):
 
 def _build_sorted_query_sheet3(sort_list_range):
     """SORT(QUERY()) for Sheet 3. Filters in A5,C5,E5,G5,I5. Sort By in K5.
-    _ApprovedData cols: 1=Date 2=Campus 3=Grade 4=Level 5=FirstName 6=LastName
-      7=Email 8=StudentGroup 9=GuideFirst 10=GuideLast 11=GuideEmail
-      12=StudentID 13=ExtStudentID
+    _ApprovedData cols: 1=Date 2=MismatchSummary 3=Campus 4=Grade 5=Level
+      6=FirstName 7=LastName 8=Email 9=StudentGroup 10=GuideFirst 11=GuideLast
+      12=GuideEmail 13=StudentID 14=ExtStudentID
     """
-    src = "'_ApprovedData'!A:M"
+    src = "'_ApprovedData'!A:N"
     q = (
         f"=IFERROR(SORT(QUERY({src}, "
         '"SELECT * WHERE 1=1"'
-        f'& IF($A$5="All", "", " AND Col2=\'" & {_sq("$A$5")} & "\'")'  # Campus=Col2
-        f'& IF($C$5="All", "", " AND Col3=\'" & {_sq("$C$5")} & "\'")'  # Grade=Col3
-        f'& IF($E$5="All", "", " AND Col4=\'" & {_sq("$E$5")} & "\'")'  # Level=Col4
-        f'& IF($G$5="All", "", " AND Col8=\'" & {_sq("$G$5")} & "\'")'  # StudentGroup=Col8
-        f'& IF($I$5="All", "", " AND Col11=\'" & {_sq("$I$5")} & "\'")'  # GuideEmail=Col11
+        f'& IF($A$5="All", "", " AND Col3=\'" & {_sq("$A$5")} & "\'")'  # Campus=Col3
+        f'& IF($C$5="All", "", " AND Col4=\'" & {_sq("$C$5")} & "\'")'  # Grade=Col4
+        f'& IF($E$5="All", "", " AND Col5=\'" & {_sq("$E$5")} & "\'")'  # Level=Col5
+        f'& IF($G$5="All", "", " AND Col9=\'" & {_sq("$G$5")} & "\'")'  # StudentGroup=Col9
+        f'& IF($I$5="All", "", " AND Col12=\'" & {_sq("$I$5")} & "\'")'  # GuideEmail=Col12
         f", 0), MATCH($K$5, {sort_list_range}, 0), "
         'IF(OR($K$5="Date Approved"), FALSE, TRUE)), "")'
     )
     return q
+
+
+def _build_sorted_query_sheet4(sort_list_range):
+    """SORT(QUERY()) for Sheet 4 (Roster Additions). Source: _AdditionsData.
+    Same col mapping as _ApprovedData: 1=Date 2=Mismatch ... 14=ExtStudentID
+    """
+    src = "'_AdditionsData'!A:N"
+    q = (
+        f"=IFERROR(SORT(QUERY({src}, "
+        '"SELECT * WHERE 1=1"'
+        f'& IF($A$5="All", "", " AND Col3=\'" & {_sq("$A$5")} & "\'")'  # Campus=Col3
+        f'& IF($C$5="All", "", " AND Col4=\'" & {_sq("$C$5")} & "\'")'  # Grade=Col4
+        f'& IF($E$5="All", "", " AND Col5=\'" & {_sq("$E$5")} & "\'")'  # Level=Col5
+        f'& IF($G$5="All", "", " AND Col9=\'" & {_sq("$G$5")} & "\'")'  # StudentGroup=Col9
+        f'& IF($I$5="All", "", " AND Col12=\'" & {_sq("$I$5")} & "\'")'  # GuideEmail=Col12
+        f", 0), MATCH($K$5, {sort_list_range}, 0), "
+        'IF(OR($K$5="Date Approved"), FALSE, TRUE)), "")'
+    )
+    return q
+
+
+def _build_sorted_query_sheet5(sort_list_range):
+    """SORT(QUERY()) for Sheet 5 (Roster Unenrollments). Source: _UnenrollData.
+    Same col mapping as _ApprovedData: 1=Date 2=Mismatch ... 14=ExtStudentID
+    """
+    src = "'_UnenrollData'!A:N"
+    q = (
+        f"=IFERROR(SORT(QUERY({src}, "
+        '"SELECT * WHERE 1=1"'
+        f'& IF($A$5="All", "", " AND Col3=\'" & {_sq("$A$5")} & "\'")'  # Campus=Col3
+        f'& IF($C$5="All", "", " AND Col4=\'" & {_sq("$C$5")} & "\'")'  # Grade=Col4
+        f'& IF($E$5="All", "", " AND Col5=\'" & {_sq("$E$5")} & "\'")'  # Level=Col5
+        f'& IF($G$5="All", "", " AND Col9=\'" & {_sq("$G$5")} & "\'")'  # StudentGroup=Col9
+        f'& IF($I$5="All", "", " AND Col12=\'" & {_sq("$I$5")} & "\'")'  # GuideEmail=Col12
+        f", 0), MATCH($K$5, {sort_list_range}, 0), "
+        'IF(OR($K$5="Date Approved"), FALSE, TRUE)), "")'
+    )
+    return q
+
+
+def _build_sorted_query_sheet6(sort_list_range):
+    """SORT(QUERY()) for Sheet 6 (Rejected Changes). Source: _RejectedData.
+    Same col mapping as _ApprovedData: 1=Date 2=Mismatch ... 14=ExtStudentID
+    """
+    src = "'_RejectedData'!A:N"
+    q = (
+        f"=IFERROR(SORT(QUERY({src}, "
+        '"SELECT * WHERE 1=1"'
+        f'& IF($A$5="All", "", " AND Col3=\'" & {_sq("$A$5")} & "\'")'  # Campus=Col3
+        f'& IF($C$5="All", "", " AND Col4=\'" & {_sq("$C$5")} & "\'")'  # Grade=Col4
+        f'& IF($E$5="All", "", " AND Col5=\'" & {_sq("$E$5")} & "\'")'  # Level=Col5
+        f'& IF($G$5="All", "", " AND Col9=\'" & {_sq("$G$5")} & "\'")'  # StudentGroup=Col9
+        f'& IF($I$5="All", "", " AND Col12=\'" & {_sq("$I$5")} & "\'")'  # GuideEmail=Col12
+        f", 0), MATCH($K$5, {sort_list_range}, 0), "
+        'IF(OR($K$5="Date Rejected"), FALSE, TRUE)), "")'
+    )
+    return q
+
+
+def _clear_conditional_format_rules(sheets_service, spreadsheet_id, sheet_ids):
+    """Remove all conditional formatting rules from specified sheets."""
+    resp = _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            fields="sheets(properties.sheetId,conditionalFormats)",
+        )
+        .execute()
+    )
+    requests = []
+    for sheet in resp.get("sheets", []):
+        sid = sheet["properties"]["sheetId"]
+        if sid not in sheet_ids:
+            continue
+        for i in range(len(sheet.get("conditionalFormats", [])) - 1, -1, -1):
+            requests.append(
+                {"deleteConditionalFormatRule": {"sheetId": sid, "index": i}}
+            )
+    if requests:
+        _retry_api(
+            lambda: sheets_service.spreadsheets()
+            .batchUpdate(spreadsheetId=spreadsheet_id, body={"requests": requests})
+            .execute()
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# DATA MIGRATION — fix corrupted cumulative tabs from v2.1.0 → v2.2.0
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _migrate_cumulative_tabs(sheets_service, spreadsheet_id):
+    """One-time migration: fix corrupted rows and add MismatchSummary column.
+
+    v2.1.0 bug: old Apps Script read from col 2 (Reject checkbox) instead of
+    col 3, inserting FALSE as first data value and losing ExtStudentID.
+
+    Target format (14 cols): Date, MismatchSummary, Campus, Grade, Level,
+    FirstName, LastName, Email, StudentGroup, GuideFirst, GuideLast,
+    GuideEmail, StudentID, ExtStudentID
+
+    Migration cases per row:
+    - 13 cols with col[1]="FALSE"/"TRUE": corrupted → remove col[1], insert
+      "" for MismatchSummary, append "" for lost ExtStudentID → 14 cols
+    - 13 cols (old v2.0.0 format): insert "" for MismatchSummary at [1] → 14
+    - 14 cols: already migrated, skip
+    """
+    cumulative_tabs = [
+        "_ApprovedData",
+        "_AdditionsData",
+        "_UnenrollData",
+        "_RejectedData",
+    ]
+
+    for tab_name in cumulative_tabs:
+        resp = _retry_api(
+            lambda t=tab_name: sheets_service.spreadsheets()
+            .values()
+            .get(spreadsheetId=spreadsheet_id, range=f"'{t}'!A:Z")
+            .execute()
+        )
+        rows = resp.get("values", [])
+        if not rows:
+            continue
+
+        # Check if migration is needed (any row not 14 cols)
+        needs_migration = any(len(r) != 14 for r in rows)
+        if not needs_migration:
+            continue
+
+        print(f"  Migrating {tab_name}: {len(rows)} rows...")
+        migrated = []
+        fixed = 0
+        for row in rows:
+            # Pad short rows
+            while len(row) < 2:
+                row.append("")
+
+            if len(row) == 14:
+                # Already correct format
+                migrated.append(row)
+            elif len(row) == 13 and str(row[1]).upper() in ("FALSE", "TRUE"):
+                # Corrupted: [date, FALSE/TRUE, campus, grade, ..., studentID]
+                # Remove the FALSE/TRUE, insert "" for MismatchSummary, append "" for lost ExtStudentID
+                date_val = row[0]
+                data = row[2:]  # campus through studentID (11 values)
+                migrated.append([date_val, ""] + data + [""])
+                fixed += 1
+            elif len(row) == 13:
+                # Old v2.0.0 format: [date, campus, grade, ..., extStudentID]
+                # Insert "" for MismatchSummary after date
+                migrated.append([row[0], ""] + row[1:])
+            else:
+                # Unknown format — pad or truncate to 14
+                while len(row) < 14:
+                    row.append("")
+                migrated.append(row[:14])
+                fixed += 1
+
+        # Clear and rewrite
+        _retry_api(
+            lambda t=tab_name: sheets_service.spreadsheets()
+            .values()
+            .clear(spreadsheetId=spreadsheet_id, range=f"'{t}'!A:Z")
+            .execute()
+        )
+        if migrated:
+            _retry_api(
+                lambda t=tab_name, m=migrated: sheets_service.spreadsheets()
+                .values()
+                .update(
+                    spreadsheetId=spreadsheet_id,
+                    range=f"'{t}'!A1",
+                    valueInputOption="RAW",
+                    body={"values": m},
+                )
+                .execute()
+            )
+        print(f"    {len(migrated)} rows migrated ({fixed} corrupted rows fixed)")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -412,32 +634,89 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
     sid = OUTPUT_SPREADSHEET_ID
     print(f"\n  Writing {len(corrections_map)} correction rows...")
 
-    # ── Ensure all tabs exist ─────────────────────────────────────────
-    sheet1_id = _ensure_tab_exists(sheets_service, sid, TAB_CORRECTED)
-    sheet2_id = _ensure_tab_exists(sheets_service, sid, TAB_SIS)
-    sheet3_id = _ensure_tab_exists(sheets_service, sid, TAB_APPROVED)
-    corr_data_id = _ensure_tab_exists(sheets_service, sid, "_CorrData")
-    sis_data_id = _ensure_tab_exists(sheets_service, sid, "_SISData")
-    approved_data_id = _ensure_tab_exists(sheets_service, sid, "_ApprovedData")
-    lists_id = _ensure_tab_exists(sheets_service, sid, "_Lists")
-
-    # ── Clear banding + data ──────────────────────────────────────────
-    _clear_banding(sheets_service, sid, [sheet1_id, sheet2_id, sheet3_id])
-    for tab in [
+    # ── Ensure all tabs exist (1 read + 1 batch create) ────────────────
+    all_tab_names = [
         TAB_CORRECTED,
         TAB_SIS,
         TAB_APPROVED,
         "_CorrData",
         "_SISData",
+        "_ApprovedData",
+        "_AdditionsData",
+        "_UnenrollData",
+        "_RejectedData",
         "_Lists",
-    ]:
-        _retry_api(
-            lambda t=tab: sheets_service.spreadsheets()
-            .values()
-            .clear(spreadsheetId=sid, range=f"'{t}'!A:Z")
-            .execute()
+        TAB_ADDITIONS,
+        TAB_UNENROLL,
+        TAB_REJECTED,
+    ]
+    tab_ids = _ensure_all_tabs(sheets_service, sid, all_tab_names)
+    sheet1_id = tab_ids[TAB_CORRECTED]
+    sheet2_id = tab_ids[TAB_SIS]
+    sheet3_id = tab_ids[TAB_APPROVED]
+    sheet4_id = tab_ids[TAB_ADDITIONS]
+    sheet5_id = tab_ids[TAB_UNENROLL]
+    sheet6_id = tab_ids[TAB_REJECTED]
+    corr_data_id = tab_ids["_CorrData"]
+    sis_data_id = tab_ids["_SISData"]
+    approved_data_id = tab_ids["_ApprovedData"]
+    additions_data_id = tab_ids["_AdditionsData"]
+    unenroll_data_id = tab_ids["_UnenrollData"]
+    rejected_data_id = tab_ids["_RejectedData"]
+    lists_id = tab_ids["_Lists"]
+
+    visible_ids = [sheet1_id, sheet2_id, sheet3_id, sheet4_id, sheet5_id, sheet6_id]
+
+    # ── Clear banding + conditional formatting + data ─────────────────
+    _clear_banding(sheets_service, sid, visible_ids)
+    _clear_conditional_format_rules(sheets_service, sid, [sheet1_id])
+
+    # Unmerge all cells on visible sheets (1 batched call instead of 6)
+    unmerge_requests = [
+        {
+            "unmergeCells": {
+                "range": {
+                    "sheetId": uid,
+                    "startRowIndex": 0,
+                    "endRowIndex": 100,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 30,
+                }
+            }
+        }
+        for uid in visible_ids
+    ]
+    _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .batchUpdate(spreadsheetId=sid, body={"requests": unmerge_requests})
+        .execute()
+    )
+
+    # Clear visible + data tabs (1 batched call instead of 9)
+    clear_tabs = [
+        TAB_CORRECTED,
+        TAB_SIS,
+        TAB_APPROVED,
+        TAB_ADDITIONS,
+        TAB_UNENROLL,
+        TAB_REJECTED,
+        "_CorrData",
+        "_SISData",
+        "_Lists",
+    ]
+    _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .values()
+        .batchClear(
+            spreadsheetId=sid,
+            body={"ranges": [f"'{t}'!A:Z" for t in clear_tabs]},
         )
-    # NOTE: _ApprovedData is NOT cleared — it's cumulative (managed by Apps Script)
+        .execute()
+    )
+    # NOTE: _ApprovedData, _AdditionsData, _UnenrollData, _RejectedData NOT cleared — cumulative
+
+    # ── Migrate cumulative tabs to 14-col format (Date + MismatchSummary + 12 fields) ──
+    _migrate_cumulative_tabs(sheets_service, sid)
 
     if not corrections_map:
         print("  No mismatches found — sheets cleared.")
@@ -496,12 +775,15 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         .execute()
     )
 
-    # _Lists: 8 columns — 5 filter values (A-E) + 3 sort options (F-H)
+    # _Lists: 11 columns — 5 filter values (A-E) + 6 sort options (F-K)
     n = {k: len(v) for k, v in unique.items()}
     s1 = SORT_OPTS_SHEET1
     s2 = SORT_OPTS_SHEET2
     s3 = SORT_OPTS_SHEET3
-    max_len = max(max(n.values()), len(s1), len(s2), len(s3))
+    s4 = SORT_OPTS_SHEET4
+    s5 = SORT_OPTS_SHEET5
+    s6 = SORT_OPTS_SHEET6
+    max_len = max(max(n.values()), len(s1), len(s2), len(s3), len(s4), len(s5), len(s6))
     lists_header = [
         "campus",
         "grade",
@@ -511,6 +793,9 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         "sort_sheet1",
         "sort_sheet2",
         "sort_sheet3",
+        "sort_sheet4",
+        "sort_sheet5",
+        "sort_sheet6",
     ]
     lists_rows = [lists_header]
     filter_keys = ["campus", "grade", "level", "student_group", "guide_email"]
@@ -522,6 +807,9 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         row.append(s1[i] if i < len(s1) else "")
         row.append(s2[i] if i < len(s2) else "")
         row.append(s3[i] if i < len(s3) else "")
+        row.append(s4[i] if i < len(s4) else "")
+        row.append(s5[i] if i < len(s5) else "")
+        row.append(s6[i] if i < len(s6) else "")
         lists_rows.append(row)
 
     _retry_api(
@@ -545,6 +833,9 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         "sort1": f"_Lists!F2:F{len(s1) + 1}",
         "sort2": f"_Lists!G2:G{len(s2) + 1}",
         "sort3": f"_Lists!H2:H{len(s3) + 1}",
+        "sort4": f"_Lists!I2:I{len(s4) + 1}",
+        "sort5": f"_Lists!J2:J{len(s5) + 1}",
+        "sort6": f"_Lists!K2:K{len(s6) + 1}",
     }
 
     # ══════════════════════════════════════════════════════════════════
@@ -554,36 +845,39 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
     vals_raw = {}
     vals_entered = {}
 
-    NC1 = 14  # checkbox + 12 fields + mismatch summary
+    NC1 = 15  # accept + reject + 12 fields + mismatch summary
     NC2 = 12  # 12 fields
-    NC3 = 13  # date + 12 fields
+    NC3 = 14  # date + mismatch summary + 12 fields
+    NC4 = 14  # date + mismatch summary + 12 fields (Roster Additions)
+    NC5 = 14  # date + mismatch summary + 12 fields (Roster Unenrollments)
+    NC6 = 15  # date + mismatch summary + 12 fields + reason for rejection
 
     # ── Sheet 1: Corrected Roster Info ────────────────────────────────
     vals_raw[f"'{TAB_CORRECTED}'!A1"] = [["Corrected Roster Info"]]
-    # Row 4: filter labels (B,D,F,H,J) + Sort By (L)
+    # Row 4: filter labels (C,E,G,I,K) + Sort By (M) — offset by 2 for accept/reject cols
     s1_r4 = [""] * NC1
-    s1_r4[1] = "Campus"
-    s1_r4[3] = "Grade"
-    s1_r4[5] = "Level"
-    s1_r4[7] = "Student Group"
-    s1_r4[9] = "Guide Email"
-    s1_r4[11] = "SORT BY"
+    s1_r4[2] = "Campus"
+    s1_r4[4] = "Grade"
+    s1_r4[6] = "Level"
+    s1_r4[8] = "Student Group"
+    s1_r4[10] = "Guide Email"
+    s1_r4[12] = "SORT BY"
     vals_raw[f"'{TAB_CORRECTED}'!A4"] = [s1_r4]
     # Row 5: dropdown defaults
     s1_r5 = [""] * NC1
-    s1_r5[1] = "All"
-    s1_r5[3] = "All"
-    s1_r5[5] = "All"
-    s1_r5[7] = "All"
-    s1_r5[9] = "All"
-    s1_r5[11] = "Campus"
+    s1_r5[2] = "All"
+    s1_r5[4] = "All"
+    s1_r5[6] = "All"
+    s1_r5[8] = "All"
+    s1_r5[10] = "All"
+    s1_r5[12] = "Campus"
     vals_raw[f"'{TAB_CORRECTED}'!A5"] = [s1_r5]
     # Row 6: headers
     vals_raw[f"'{TAB_CORRECTED}'!A6"] = [
-        ["\u2713"] + OUTPUT_FIELDS + ["Mismatch Summary"]
+        ["Accept Changes", "Reject Changes"] + OUTPUT_FIELDS + ["Mismatch Summary"]
     ]
-    # Row 7: SORT(QUERY()) formula
-    vals_entered[f"'{TAB_CORRECTED}'!B7"] = [
+    # Row 7: SORT(QUERY()) formula in C7 (offset by 2)
+    vals_entered[f"'{TAB_CORRECTED}'!C7"] = [
         [_build_sorted_query_sheet1(list_ranges["sort1"])]
     ]
 
@@ -628,9 +922,86 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
     s3_r5[8] = "All"
     s3_r5[10] = "Date Approved"
     vals_raw[f"'{TAB_APPROVED}'!A5"] = [s3_r5]
-    vals_raw[f"'{TAB_APPROVED}'!A6"] = [["Date Approved"] + OUTPUT_FIELDS]
+    vals_raw[f"'{TAB_APPROVED}'!A6"] = [
+        ["Date Approved", "Mismatch Summary"] + OUTPUT_FIELDS
+    ]
     vals_entered[f"'{TAB_APPROVED}'!A7"] = [
         [_build_sorted_query_sheet3(list_ranges["sort3"])]
+    ]
+
+    # ── Sheet 4: Roster Additions ─────────────────────────────────────
+    vals_raw[f"'{TAB_ADDITIONS}'!A1"] = [["Roster Additions"]]
+    s4_r4 = [""] * NC4
+    s4_r4[0] = "Campus"
+    s4_r4[2] = "Grade"
+    s4_r4[4] = "Level"
+    s4_r4[6] = "Student Group"
+    s4_r4[8] = "Guide Email"
+    s4_r4[10] = "SORT BY"
+    vals_raw[f"'{TAB_ADDITIONS}'!A4"] = [s4_r4]
+    s4_r5 = [""] * NC4
+    s4_r5[0] = "All"
+    s4_r5[2] = "All"
+    s4_r5[4] = "All"
+    s4_r5[6] = "All"
+    s4_r5[8] = "All"
+    s4_r5[10] = "Date Approved"
+    vals_raw[f"'{TAB_ADDITIONS}'!A5"] = [s4_r5]
+    vals_raw[f"'{TAB_ADDITIONS}'!A6"] = [
+        ["Date Approved", "Mismatch Summary"] + OUTPUT_FIELDS
+    ]
+    vals_entered[f"'{TAB_ADDITIONS}'!A7"] = [
+        [_build_sorted_query_sheet4(list_ranges["sort4"])]
+    ]
+
+    # ── Sheet 5: Roster Unenrollments ─────────────────────────────────
+    vals_raw[f"'{TAB_UNENROLL}'!A1"] = [["Roster Unenrollments"]]
+    s5_r4 = [""] * NC5
+    s5_r4[0] = "Campus"
+    s5_r4[2] = "Grade"
+    s5_r4[4] = "Level"
+    s5_r4[6] = "Student Group"
+    s5_r4[8] = "Guide Email"
+    s5_r4[10] = "SORT BY"
+    vals_raw[f"'{TAB_UNENROLL}'!A4"] = [s5_r4]
+    s5_r5 = [""] * NC5
+    s5_r5[0] = "All"
+    s5_r5[2] = "All"
+    s5_r5[4] = "All"
+    s5_r5[6] = "All"
+    s5_r5[8] = "All"
+    s5_r5[10] = "Date Approved"
+    vals_raw[f"'{TAB_UNENROLL}'!A5"] = [s5_r5]
+    vals_raw[f"'{TAB_UNENROLL}'!A6"] = [
+        ["Date Approved", "Mismatch Summary"] + OUTPUT_FIELDS
+    ]
+    vals_entered[f"'{TAB_UNENROLL}'!A7"] = [
+        [_build_sorted_query_sheet5(list_ranges["sort5"])]
+    ]
+
+    # ── Sheet 6: Rejected Changes ─────────────────────────────────────
+    vals_raw[f"'{TAB_REJECTED}'!A1"] = [["Rejected Changes"]]
+    s6_r4 = [""] * NC6
+    s6_r4[0] = "Campus"
+    s6_r4[2] = "Grade"
+    s6_r4[4] = "Level"
+    s6_r4[6] = "Student Group"
+    s6_r4[8] = "Guide Email"
+    s6_r4[10] = "SORT BY"
+    vals_raw[f"'{TAB_REJECTED}'!A4"] = [s6_r4]
+    s6_r5 = [""] * NC6
+    s6_r5[0] = "All"
+    s6_r5[2] = "All"
+    s6_r5[4] = "All"
+    s6_r5[6] = "All"
+    s6_r5[8] = "All"
+    s6_r5[10] = "Date Rejected"
+    vals_raw[f"'{TAB_REJECTED}'!A5"] = [s6_r5]
+    vals_raw[f"'{TAB_REJECTED}'!A6"] = [
+        ["Date Rejected", "Mismatch Summary"] + OUTPUT_FIELDS + ["Reason for Rejection"]
+    ]
+    vals_entered[f"'{TAB_REJECTED}'!A7"] = [
+        [_build_sorted_query_sheet6(list_ranges["sort6"])]
     ]
 
     # ── Write values (batched — 2 API calls instead of 15+) ─────────
@@ -671,7 +1042,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
             NC1,
             list_ranges,
             has_checkbox=True,
-            sort_col_start=11,
+            sort_col_start=12,
             sort_list_key="sort1",
             num_data_rows=len(corr_rows),
         )
@@ -698,9 +1069,66 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
             num_data_rows=0,
         )
     )
+    fmt.extend(
+        _format_visible_sheet(
+            sheet4_id,
+            NC4,
+            list_ranges,
+            has_checkbox=False,
+            sort_col_start=10,
+            sort_list_key="sort4",
+            num_data_rows=0,
+        )
+    )
+    fmt.extend(
+        _format_visible_sheet(
+            sheet5_id,
+            NC5,
+            list_ranges,
+            has_checkbox=False,
+            sort_col_start=10,
+            sort_list_key="sort5",
+            num_data_rows=0,
+        )
+    )
+    fmt.extend(
+        _format_visible_sheet(
+            sheet6_id,
+            NC6,
+            list_ranges,
+            has_checkbox=False,
+            sort_col_start=10,
+            sort_list_key="sort6",
+            num_data_rows=0,
+        )
+    )
+    # Reason for Rejection column width on Sheet 6 (last col = index 14)
+    fmt.append(_cw(sheet6_id, NC6 - 1, 250))
+
+    # Mismatch Summary col B (index 1): red header + 200px width on Sheets 3-6
+    for ms_sheet_id in [sheet3_id, sheet4_id, sheet5_id, sheet6_id]:
+        fmt.append(
+            _rc(
+                ms_sheet_id,
+                5,
+                6,
+                1,
+                2,
+                _cf(bg=RED_HDR, fg=WHITE, bold=True, sz=10, ha="CENTER", va="MIDDLE"),
+            )
+        )
+        fmt.append(_cw(ms_sheet_id, 1, 200))
 
     # Hide data tabs
-    for hid in [corr_data_id, sis_data_id, approved_data_id, lists_id]:
+    for hid in [
+        corr_data_id,
+        sis_data_id,
+        approved_data_id,
+        additions_data_id,
+        unenroll_data_id,
+        rejected_data_id,
+        lists_id,
+    ]:
         fmt.append(
             {
                 "updateSheetProperties": {
@@ -710,45 +1138,52 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
             }
         )
 
-    # Date format on Sheet 3 col A (QUERY strips number formatting from _ApprovedData)
-    fmt.append(
-        {
-            "repeatCell": {
-                "range": {
-                    "sheetId": sheet3_id,
-                    "startRowIndex": 6,
-                    "endRowIndex": 1006,
-                    "startColumnIndex": 0,
-                    "endColumnIndex": 1,
-                },
-                "cell": {
-                    "userEnteredFormat": {
-                        "numberFormat": {
-                            "type": "DATE_TIME",
-                            "pattern": "yyyy-MM-dd HH:mm:ss",
+    # Date format on Sheets 3/4/5/6 col A (QUERY strips number formatting)
+    for date_sheet_id in [sheet3_id, sheet4_id, sheet5_id, sheet6_id]:
+        fmt.append(
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": date_sheet_id,
+                        "startRowIndex": 6,
+                        "endRowIndex": 1006,
+                        "startColumnIndex": 0,
+                        "endColumnIndex": 1,
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "numberFormat": {
+                                "type": "DATE_TIME",
+                                "pattern": "yyyy-MM-dd HH:mm:ss",
+                            }
                         }
-                    }
-                },
-                "fields": "userEnteredFormat.numberFormat",
+                    },
+                    "fields": "userEnteredFormat.numberFormat",
+                }
             }
-        }
-    )
+        )
 
-    # Checkbox data validation on Sheet 1 col A, rows 7+
-    fmt.append(
-        {
-            "setDataValidation": {
-                "range": {
-                    "sheetId": sheet1_id,
-                    "startRowIndex": 6,
-                    "endRowIndex": 6 + len(corr_rows) + 10,
-                    "startColumnIndex": 0,
-                    "endColumnIndex": 1,
-                },
-                "rule": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True},
+    # Checkbox data validation on Sheet 1 col A (Accept) and col B (Reject), rows 7+
+    cb_end = 6 + len(corr_rows) + 10
+    for cb_col in [0, 1]:  # col A = Accept, col B = Reject
+        fmt.append(
+            {
+                "setDataValidation": {
+                    "range": {
+                        "sheetId": sheet1_id,
+                        "startRowIndex": 6,
+                        "endRowIndex": cb_end,
+                        "startColumnIndex": cb_col,
+                        "endColumnIndex": cb_col + 1,
+                    },
+                    "rule": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True},
+                }
             }
-        }
-    )
+        )
+
+    # Accept column (A) light green background, Reject column (B) light red background
+    fmt.append(_rc(sheet1_id, 6, cb_end, 0, 1, _cf(bg=ACCEPT_BG, sz=10, ha="CENTER")))
+    fmt.append(_rc(sheet1_id, 6, cb_end, 1, 2, _cf(bg=REJECT_BG, sz=10, ha="CENTER")))
 
     # Execute in batches
     for i in range(0, len(fmt), 200):
@@ -777,7 +1212,7 @@ def _format_visible_sheet(
     num_data_rows,
 ):
     fmt = []
-    offset = 1 if has_checkbox else 0
+    offset = 2 if has_checkbox else 0  # 2 cols for accept/reject checkboxes
 
     # ── Row 0 (title): merged, navy dark, 20pt bold white ─────────────
     fmt.append(_mg(sheet_id, 0, 1, 0, nc))
@@ -920,15 +1355,16 @@ def _format_visible_sheet(
 
     # ── Column widths ─────────────────────────────────────────────────
     if has_checkbox:
-        fmt.append(_cw(sheet_id, 0, 30))
+        fmt.append(_cw(sheet_id, 0, 105))  # Accept Changes col
+        fmt.append(_cw(sheet_id, 1, 105))  # Reject Changes col
     field_widths = [150, 60, 80, 100, 100, 220, 150, 100, 100, 220, 120, 140]
     for i, w in enumerate(field_widths):
         fmt.append(_cw(sheet_id, offset + i, w))
     if has_checkbox:
-        fmt.append(_cw(sheet_id, offset + len(field_widths), 200))
+        fmt.append(_cw(sheet_id, offset + len(field_widths), 200))  # Mismatch Summary
 
     # ── Alternating row colors ────────────────────────────────────────
-    end_row = max(6 + num_data_rows + 5, 20)
+    end_row = max(6 + num_data_rows + 5, 206)
     fmt.append(
         {
             "addBanding": {
@@ -950,7 +1386,7 @@ def _format_visible_sheet(
         }
     )
 
-    # ── Mismatch Summary column: dark red header, light red data (Sheet 1 only) ──
+    # ── Mismatch Summary column: dark red header + conditional color by type (Sheet 1 only) ──
     if has_checkbox:
         mismatch_col = nc - 1  # last column (index 13 for Sheet 1)
         # Dark red header (row 5)
@@ -964,16 +1400,64 @@ def _format_visible_sheet(
                 _cf(bg=RED_HDR, fg=WHITE, bold=True, sz=10, ha="CENTER", va="MIDDLE"),
             )
         )
-        # Light red data cells (row 6 onward)
+        # Conditional formatting rules (priority order: 0=highest)
+        mm_range = {
+            "sheetId": sheet_id,
+            "startRowIndex": 6,
+            "endRowIndex": end_row,
+            "startColumnIndex": mismatch_col,
+            "endColumnIndex": mismatch_col + 1,
+        }
+        # Rule 0: "Roster Addition" → green
         fmt.append(
-            _rc(
-                sheet_id,
-                6,
-                end_row,
-                mismatch_col,
-                mismatch_col + 1,
-                _cf(bg=RED_LIGHT, sz=10),
-            )
+            {
+                "addConditionalFormatRule": {
+                    "rule": {
+                        "ranges": [mm_range],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_CONTAINS",
+                                "values": [{"userEnteredValue": "Roster Addition"}],
+                            },
+                            "format": {"backgroundColor": GREEN_LIGHT},
+                        },
+                    },
+                    "index": 0,
+                }
+            }
+        )
+        # Rule 1: "Unenrolling" → light yellow
+        fmt.append(
+            {
+                "addConditionalFormatRule": {
+                    "rule": {
+                        "ranges": [mm_range],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_CONTAINS",
+                                "values": [{"userEnteredValue": "Unenrolling"}],
+                            },
+                            "format": {"backgroundColor": YELLOW_LIGHT},
+                        },
+                    },
+                    "index": 1,
+                }
+            }
+        )
+        # Rule 2: NOT_BLANK → yellow (catches field mismatches)
+        fmt.append(
+            {
+                "addConditionalFormatRule": {
+                    "rule": {
+                        "ranges": [mm_range],
+                        "booleanRule": {
+                            "condition": {"type": "NOT_BLANK"},
+                            "format": {"backgroundColor": YELLOW_MM},
+                        },
+                    },
+                    "index": 2,
+                }
+            }
         )
 
     return fmt

@@ -1,5 +1,65 @@
 # Changelog
 
+## [v2.2.0] — 2026-04-17
+
+### Fixed
+- **Column shift bug in approval/rejection sheets** — v2.0.0 Apps Script read from col 2 (Reject checkbox) instead of col 3, inserting `FALSE` as first data value and shifting all fields right by 1. ExtStudentID was lost. Root cause: user had not pasted the updated v2.1.0 Code.gs. Fixed by: migration function + updated Code.gs with correct column offsets.
+- **Data migration for corrupted cumulative tabs** — `_migrate_cumulative_tabs()` detects and fixes 3 row formats: corrupted (13 cols with FALSE), old v2.0.0 (13 cols correct), and already-migrated (14 cols). Removes FALSE, inserts blank Mismatch Summary, pads missing ExtStudentID.
+
+### Added
+- **Mismatch Summary column on Sheets 3-6** — When a correction is accepted/rejected, the mismatch type (e.g. "Roster Addition", "Guide Name", "Unenrolling") is now stored as column B in all cumulative hidden tabs. Visible on all approval/rejection sheets as the 2nd column with red header formatting.
+- **14-column layout for cumulative tabs** — _ApprovedData, _AdditionsData, _UnenrollData, _RejectedData now store: Date, MismatchSummary, Campus, Grade, Level, FirstName, LastName, Email, StudentGroup, GuideFirst, GuideLast, GuideEmail, StudentID, ExtStudentID.
+
+### Changed
+- **NC3/NC4/NC5 = 14** (was 13), **NC6 = 15** (was 14) — all visible sheets updated for new column
+- **QUERY column references shifted** for Sheets 3-6: Campus=Col3, Grade=Col4, Level=Col5, StudentGroup=Col9, GuideEmail=Col12 (was Col2/3/4/8/11). Data range A:M → A:N.
+- **SORT_OPTS for Sheets 3-6** — added "Mismatch Summary" as 2nd sort option
+- **Code.gs appendRow** — now writes `[date, mismatchSummary].concat(data)` instead of `[date].concat(data)` for both accept and reject paths
+
+## [v2.1.1] — 2026-04-16
+
+### Improved
+- **API call batching — pre-write phase** — Reduced ~28 sequential API calls down to ~5:
+  - `_ensure_tab_exists` (13 individual calls) → `_ensure_all_tabs` (1 read + 1 batch create)
+  - `unmergeCells` (6 individual calls, one per visible sheet) → single batched `batchUpdate` with all 6
+  - `values().clear()` (9 individual calls) → single `values().batchClear()` call
+- **Banding coverage extended** — Alternating row colors now cover 200 data rows (was 14 for cumulative sheets). Sheets 3-6 previously had `end_row = max(6 + 0 + 5, 20) = 20` because `num_data_rows=0`; now floors at 206.
+
+### Changed
+- **HUMAN_INSTRUCTIONS rewritten for v2.1.0** — Updated to document accept/reject workflow, 6 sheets, mismatch types, and new troubleshooting entries. Previously described v1.0 single-checkbox 3-sheet workflow.
+- **AI_INSTRUCTIONS updated** — Added batching design decision (#6), slow pre-writes bug/fix entry, and 2 new known limitations (banding 200-row cap, Reason for Rejection column behavior).
+
+## [v2.1.0] — 2026-04-15
+
+### Added
+- **Accept/Reject checkboxes on Sheet 1** — Column A ("Accept Changes", light green #D4EDDA) and Column B ("Reject Changes", light red #FEE2E2) replace the single checkbox column. Mutual exclusion: checking one unchecks the other.
+- **"Rejected Changes" visible sheet** (Sheet 6) — Same full layout as other approval sheets (title, caption, filters, sort, QUERY from `_RejectedData`), with an extra "Reason for Rejection" column (blank for manual entry).
+- **`_RejectedData` hidden tab** — Cumulative storage for all rejected rows (never cleared by Python). Apps Script appends rejected rows here regardless of mismatch type.
+- **`unmergeCells` on re-run** — All visible sheets are unmerged before applying new formatting, preventing `mergeCells` errors when column layout changes between versions.
+
+### Changed
+- **Sheet 1 column layout** — NC1 changed from 14 to 15 columns (accept + reject + 12 fields + mismatch summary). QUERY formula output starts in C7 (was B7). Filter dropdown cells shifted by 1 column (C5/E5/G5/I5/K5, was B5/D5/F5/H5/J5). Sort By in M5 (was L5).
+- **`_Lists` tab expanded to 11 columns** — 5 filter values (A-E) + 6 sort options (F-K), up from 10 columns.
+- **Apps Script reads data from C:N** (12 data cols, was B:M) and Mismatch Summary from col O (was col N).
+- **Grey-out range** on accepted/rejected rows: 15 columns (was 14).
+
+## [v2.0.0] — 2026-04-15
+
+### Added
+- **Roster Addition mismatch type** — Students enrolled in MAP roster whose `student_id` is not found in SIS are now flagged as "Roster Addition" (previously "NOT IN SIS"). Mismatch Summary cell highlighted light green (#D4EDDA).
+- **Unenrolling mismatch type** — Students with Notes != "Enrolled" in MAP but `admissionstatus` = "Enrolled" in SIS are flagged as "Unenrolling". Mismatch Summary cell highlighted light yellow (#FFFDE7).
+- **"Roster Additions" visible sheet** (Sheet 4) — Same full layout as Automated Correction List (title, caption, filters, sort, QUERY from `_AdditionsData`).
+- **"Roster Unenrollments" visible sheet** (Sheet 5) — Same layout, reads from `_UnenrollData`.
+- **Apps Script routing by mismatch type** — Checkbox approvals on Sheet 1 now route to `_AdditionsData`, `_UnenrollData`, or `_ApprovedData` based on the Mismatch Summary column value.
+- **Conditional formatting on Mismatch Summary column** — Three rules in priority order: "Roster Addition" → green, "Unenrolling" → light yellow, NOT_BLANK → yellow (field mismatches). Replaces previous static red coloring.
+- **`_AdditionsData` and `_UnenrollData` hidden tabs** — Cumulative storage for approved roster additions and unenrollments (never cleared by Python).
+- **`read_map_roster()` now returns enrolled AND non-enrolled students** — Two separate dicts enable unenrolling detection without changing the enrolled comparison flow.
+
+### Changed
+- **Field mismatch color** — Mismatch Summary data cells changed from light red (#FEE2E2) to yellow (#FFF3CD).
+- **`_Lists` tab expanded to 10 columns** — 5 filter values (A-E) + 5 sort options (F-J), up from 8 columns (3 sort options).
+- **`compare_students()` accepts 3 dicts** — `(map_enrolled, map_non_enrolled, sis_students)` instead of `(map_students, sis_students)`.
+
 ## [v1.3.0] — 2026-04-14
 
 ### Fixed (Critical)

@@ -15,8 +15,8 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | `generate_corrections.py` | ~350 | Main orchestrator: auth, read MAP, query BQ, compare, write |
 | `config.py` | ~90 | Constants, header mappings, campus list, sheet IDs |
 | `queries.py` | ~30 | Single BQ query function for alpha_roster |
-| `sheets_writer.py` | ~680 | Sheets API: hidden tabs, QUERY formulas, title/caption, filters, format |
-| `apps_script/Code.gs` | ~80 | Apps Script onEdit: checkbox → Sheet 3, clear checkboxes on filter change |
+| `sheets_writer.py` | ~850 | Sheets API: hidden tabs, QUERY formulas, title/caption, filters, format |
+| `apps_script/Code.gs` | ~105 | Apps Script onEdit: accept/reject checkboxes → route by type, clear on filter change |
 | `write_user_guide.py` | ~215 | Google Docs API: write formatted user guide |
 | `run_export.ps1` | ~70 | One-time: Athena CTAS → S3 → GCS → BQ for alpha_roster |
 | `alpha_roster_ctas.sql` | ~30 | Athena SQL with dedup, handles reserved word "group" |
@@ -26,10 +26,13 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 ### Hidden Tabs (written by Python, never shown to users)
 - `_CorrData` — Raw MAP roster data for mismatched students (13 cols, no headers)
 - `_SISData` — Raw SIS data for same students (12 cols, no headers)
-- `_Lists` — Unique values for filter dropdowns (cols A-E) + sort options (cols F-H, one per sheet)
-- `_ApprovedData` — Cumulative approved corrections (appended by Apps Script, read by Sheet 3 QUERY)
+- `_Lists` — Unique values for filter dropdowns (cols A-E) + sort options (cols F-K, one per sheet)
+- `_ApprovedData` — Cumulative approved field-mismatch corrections (14 cols: Date, MismatchSummary, 12 fields)
+- `_AdditionsData` — Cumulative approved roster additions (14 cols, same layout)
+- `_UnenrollData` — Cumulative approved unenrollments (14 cols, same layout)
+- `_RejectedData` — Cumulative rejected changes (14 cols, same layout)
 
-### Sheet 1: "Corrected Roster Info" (MAP data + checkboxes)
+### Sheet 1: "Corrected Roster Info" (MAP data + accept/reject checkboxes)
 | Row | Content |
 |-----|---------|
 | 1 | Title: "Corrected Roster Info" (merged, navy dark, 20pt bold white) |
@@ -37,38 +40,61 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | 3 | Spacer (5px, dark) |
 | 4 | Filter labels + "SORT BY" label (merged pairs, dark) |
 | 5 | Dropdown values + Sort By dropdown (merged pairs, teal bg, data validation from _Lists) |
-| 6 | Column headers: check, Campus, Grade, ... Mismatch Summary (navy, bold white) |
-| 7+ | SORT(QUERY()) formula in B7 (filtered + sorted from _CorrData), checkboxes in A7+ |
+| 6 | Column headers: Accept Changes, Reject Changes, Campus, Grade, ... Mismatch Summary (navy, bold white) |
+| 7+ | SORT(QUERY()) formula in C7 (filtered + sorted from _CorrData), checkboxes in A7+ (green) and B7+ (red) |
 
 ### Sheet 2: "Current Roster Info in SIS" (same layout, no checkboxes)
 Same title/caption/filter/sort rows. SORT(QUERY()) formula in A7 pulls from `_SISData`.
 
-### Sheet 3: "Automated Correction List" (filters + QUERY from _ApprovedData)
-Same title/caption/filter/sort rows. SORT(QUERY()) formula in A7 pulls from hidden `_ApprovedData` tab. Apps Script appends checked corrections to `_ApprovedData`, and the QUERY auto-displays them. Default sort: Date Approved (descending = most recent first).
+### Sheets 3-5: Approval sheets (14 cols: Date + Mismatch Summary + 12 fields)
+Same title/caption/filter/sort rows. SORT(QUERY()) formula in A7 pulls from hidden cumulative tab (A:N, 14 cols). Mismatch Summary is column B with red header. QUERY col refs: Campus=Col3, Grade=Col4, Level=Col5, StudentGroup=Col9, GuideEmail=Col12.
+- Sheet 3 "Automated Correction List" — reads `_ApprovedData` (field mismatches)
+- Sheet 4 "Roster Additions" — reads `_AdditionsData` ("Roster Addition" type)
+- Sheet 5 "Roster Unenrollments" — reads `_UnenrollData` ("Unenrolling" type)
+
+### Sheet 6: "Rejected Changes" (15 cols: Date + Mismatch Summary + 12 fields + Reason)
+Same as Sheets 3-5 but with extra "Reason for Rejection" column (col O, blank for manual entry). QUERY reads `_RejectedData` A:N (14 cols); Reason is outside QUERY output.
 
 ## Filtering & Sorting Mechanism
 
 **Dropdowns filter AND sort via SORT(QUERY()) formulas — NOT Apps Script.**
 
-The formula pattern (matching `sheets_builder.py`):
+The formula pattern for Sheet 1 (offset by 2 for accept/reject columns):
 ```
 =IFERROR(SORT(QUERY('_CorrData'!A:M, 
   "SELECT * WHERE 1=1"
-  & IF($B$5="All", "", " AND Col1='" & $B$5 & "'")
-  & IF($D$5="All", "", " AND Col2='" & $D$5 & "'")
+  & IF($C$5="All", "", " AND Col1='" & $C$5 & "'")
+  & IF($E$5="All", "", " AND Col2='" & $E$5 & "'")
   ..., 0),
-  MATCH($L$5, _Lists!F$2:F$14, 0),
-  IF(OR($L$5="Grade"), FALSE, TRUE)), "")
+  MATCH($M$5, _Lists!F$2:F$14, 0),
+  IF(OR($M$5="Grade"), FALSE, TRUE)), "")
 ```
 
 - QUERY handles filtering (WHERE clauses reference dropdown cells)
 - SORT wraps QUERY output, using MATCH to find column index from Sort By dropdown
 - Sort direction: ascending (TRUE) for all text fields, descending (FALSE) for Grade and Date Approved
-- Sort options stored in `_Lists` columns F (Sheet 1), G (Sheet 2), H (Sheet 3)
+- Sort options stored in `_Lists` columns F-K (one per visible sheet)
 
-**Checkbox handling**: When a filter or Sort By dropdown changes (row 5), Apps Script clears all checkboxes in column A because the QUERY output shifts.
+**Checkbox handling**: When a filter or Sort By dropdown changes (row 5), Apps Script clears both Accept (col A) and Reject (col B) checkboxes because the QUERY output shifts.
 
-**Sheet 3 data flow**: Apps Script appends to hidden `_ApprovedData` tab → visible Sheet 3 QUERY reads from `_ApprovedData` with filter + sort.
+**Accept/Reject workflow on Sheet 1**:
+- **Col A (Accept Changes)** — light green (#D4EDDA) background. When checked, Apps Script reads col O (Mismatch Summary) and routes to:
+  - `"Roster Addition"` → `_AdditionsData` → Sheet 4 auto-updates via QUERY
+  - `"Unenrolling"` → `_UnenrollData` → Sheet 5 auto-updates via QUERY
+  - field mismatches → `_ApprovedData` → Sheet 3 auto-updates via QUERY
+- **Col B (Reject Changes)** — light red (#FEE2E2) background. When checked, all rejected rows → `_RejectedData` → Sheet 6 auto-updates via QUERY
+- **Mutual exclusion**: Checking Accept unchecks Reject and vice versa
+- Data columns read from C:N (12 cols), Mismatch Summary in col O (column 15)
+
+## Mismatch Types
+
+| Type | Mismatch Summary | Condition | Color |
+|------|-----------------|-----------|-------|
+| Roster Addition | "Roster Addition" | Enrolled in MAP, student_id not in SIS | Light green (#D4EDDA) |
+| Field Mismatch | "Grade, Email" etc. | Enrolled in both, fields differ | Yellow (#FFF3CD) |
+| Unenrolling | "Unenrolling" | Notes != "Enrolled" in MAP, admissionstatus = "Enrolled" in SIS | Light yellow (#FFFDE7) |
+
+Colors are applied via conditional formatting rules on the Mismatch Summary column (Sheet 1 only), in priority order: Roster Addition → Unenrolling → NOT_BLANK (field mismatches).
 
 ## Data Sources
 
@@ -106,8 +132,9 @@ The formula pattern (matching `sheets_builder.py`):
 1. **QUERY formulas for filtering** — Apps Script `hideRows()` approach failed because it couldn't map dropdown positions to data columns. QUERY formulas auto-recalculate when dropdown cells change.
 2. **Hidden data tabs** — Raw data on `_CorrData`/`_SISData`, QUERY on visible tabs. Same pattern as the dashboard pipeline's `_Data` tab.
 3. **textFormatRuns for User Guide link** — The caption uses `updateCells` with `textFormatRuns` to create a clickable "User Guide" hyperlink mid-text.
-4. **Checkbox stale-clearing** — When a dropdown changes, Apps Script clears all col A checkboxes because QUERY output rows shift.
+4. **Checkbox stale-clearing** — When a dropdown changes, Apps Script clears both col A and col B checkboxes because QUERY output rows shift.
 5. **Header auto-detection** — Handles schema differences across campus sheets.
+6. **Batched API pre-writes** — Tab existence (1 read + 1 batch create), unmergeCells (1 batched call for all 6 sheets), clear values (`batchClear` for 9 tabs). ~5 pre-write API calls total instead of ~28.
 
 ## Common Bugs & Fixes
 
@@ -122,10 +149,13 @@ The formula pattern (matching `sheets_builder.py`):
 | Campus shows 0 enrolled | Notes column at different index | Header auto-detection via `MAP_HEADER_MAP` |
 | Dropdown doesn't filter | Using Apps Script hideRows instead of QUERY | Rewrote to use QUERY formulas referencing dropdown cells |
 | Slow writes (~35s) | 15+ individual API calls for value ranges | Batched into 2 calls via `values().batchUpdate()` (~16s) |
+| Slow pre-writes (~15s) | 28 individual API calls for tab checks, unmerge, clear | Batched into ~5 calls via `_ensure_all_tabs`, batch `unmergeCells`, `batchClear` |
 | Duplicate student IDs silently overwritten | Same ID in multiple campus sheets | Warning logged; last-write-wins preserved |
+| mergeCells error on re-run | Old merged cells conflict with new layout | `unmergeCells` runs before formatting on all visible sheets |
 
 ## Known Limitations
 
 - **Grade sorts lexicographically** — "10" sorts before "2" because QUERY treats grades as text. Numeric sorting would require a helper column.
-- **`_ApprovedData` grows indefinitely** — No automatic pruning. Manual cleanup needed periodically.
-- **`admissionstatus` not surfaced** — SIS students with non-Enrolled status still show field-level mismatches rather than a clear "WITHDRAWN IN SIS" flag.
+- **Cumulative hidden tabs grow indefinitely** — `_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData` are never cleared. Manual cleanup needed periodically.
+- **Banding covers 200 data rows** — Alternating row colors extend to row 206. If cumulative sheets exceed 200 approved rows, increase the `end_row` floor in `_format_visible_sheet()`.
+- **Reason for Rejection column not in QUERY output** — Sheet 6 QUERY reads from `_RejectedData` A:M (13 cols). The "Reason for Rejection" header is in col N (col 14) but the column content is manually entered by IMs, not populated by QUERY.

@@ -63,6 +63,9 @@ MAP_HEADER_MAP = {
 TAB_CORRECTED = "Corrected Roster Info"
 TAB_SIS = "Current Roster Info in SIS"
 TAB_APPROVED = "Automated Correction List"
+TAB_ADDITIONS = "Roster Additions"
+TAB_UNENROLL = "Roster Unenrollments"
+TAB_REJECTED = "Rejected Changes"
 
 # ── Output column headers ──────────────────────────────────────────────────
 OUTPUT_FIELDS = [
