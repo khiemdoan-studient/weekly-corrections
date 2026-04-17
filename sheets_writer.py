@@ -641,6 +641,88 @@ def _realign_row(row):
     return fixed[:TARGET_COLS]
 
 
+def _backfill_mismatch_summary(sheets_service, spreadsheet_id):
+    """Fill blank MismatchSummary in cumulative tabs using _CorrData lookup.
+
+    _CorrData has current mismatch types (col 12 = MismatchSummary, col 10 = StudentID).
+    For _AdditionsData, type is always "Roster Addition".
+    For _UnenrollData, type is always "Unenrolling".
+    For _ApprovedData and _RejectedData, look up by StudentID.
+    """
+    # Build lookup: student_id -> mismatch_summary from _CorrData
+    resp = _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .values()
+        .get(spreadsheetId=spreadsheet_id, range="'_CorrData'!A:M")
+        .execute()
+    )
+    corr_rows = resp.get("values", [])
+    lookup = {}
+    for r in corr_rows:
+        if len(r) > 12:
+            sid = str(r[10]).strip()
+            mismatch = str(r[12]).strip()
+            if sid and mismatch:
+                lookup[sid] = mismatch
+
+    # Backfill each cumulative tab
+    backfill_map = {
+        "_ApprovedData": None,  # lookup from _CorrData
+        "_AdditionsData": "Roster Addition",  # always this type
+        "_UnenrollData": "Unenrolling",  # always this type
+        "_RejectedData": None,  # lookup from _CorrData
+    }
+
+    for tab_name, fixed_type in backfill_map.items():
+        resp = _retry_api(
+            lambda t=tab_name: sheets_service.spreadsheets()
+            .values()
+            .get(spreadsheetId=spreadsheet_id, range=f"'{t}'!A:N")
+            .execute()
+        )
+        rows = resp.get("values", [])
+        if not rows:
+            continue
+
+        filled = 0
+        for row in rows:
+            while len(row) < 14:
+                row.append("")
+            if row[1].strip():
+                continue  # already has mismatch summary
+
+            if fixed_type:
+                row[1] = fixed_type
+                filled += 1
+            else:
+                sid = str(row[12]).strip()
+                if sid in lookup:
+                    row[1] = lookup[sid]
+                    filled += 1
+
+        if filled == 0:
+            continue
+
+        print(f"  Backfilling {tab_name}: {filled} rows filled with mismatch type")
+        _retry_api(
+            lambda t=tab_name: sheets_service.spreadsheets()
+            .values()
+            .clear(spreadsheetId=spreadsheet_id, range=f"'{t}'!A:Z")
+            .execute()
+        )
+        _retry_api(
+            lambda t=tab_name, r=rows: sheets_service.spreadsheets()
+            .values()
+            .update(
+                spreadsheetId=spreadsheet_id,
+                range=f"'{t}'!A1",
+                valueInputOption="RAW",
+                body={"values": r},
+            )
+            .execute()
+        )
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # MAIN WRITE FUNCTION
 # ══════════════════════════════════════════════════════════════════════════
@@ -733,6 +815,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
 
     # ── Migrate cumulative tabs to 14-col format (Date + MismatchSummary + 12 fields) ──
     _migrate_cumulative_tabs(sheets_service, sid)
+    _backfill_mismatch_summary(sheets_service, sid)
 
     if not corrections_map:
         print("  No mismatches found — sheets cleared.")
