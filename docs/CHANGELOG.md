@@ -1,5 +1,32 @@
 # Changelog
 
+## [v2.4.4] — 2026-04-22
+
+### Added
+- **Row-hiding on Sheet 1 for recently-handled students** — Accepted/Rejected rows now disappear from "Corrected Roster Info" on the next hourly pipeline run and stay hidden for 7 days. Eliminates the long-standing confusion where a student's checkbox was cleared on pipeline rebuild but the row kept reappearing until the data team updated SIS. Behavior after 7 days:
+  - If the mismatch still exists in MAP vs SIS → student reappears on Sheet 1 (signal that the correction is stale and hasn't been processed)
+  - If SIS was updated → student naturally stays absent (no mismatch to flag anyway)
+- **`HIDE_HANDLED_DAYS = 7` in `config.py`** — Tunable window. Set to 0 to disable the filter entirely and restore the old always-show-everything behavior.
+- **`generate_corrections.py:read_handled_student_ids(sheets_service, days_back)`** — Walks all 4 cumulative tabs (`_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData`); parses canonical `yyyy-MM-dd HH:mm:ss` timestamps from col A; returns the set of `student_id`s handled within the cutoff window.
+- **`generate_corrections.py:_hide_recently_handled(corrections_map, corrections_sis, handled_ids)`** — Filters the parallel lists, dropping any student whose ID is in `handled_ids`.
+
+### Changed
+- **`generate_corrections.py:main()`** — Now calls `read_handled_student_ids` + `_hide_recently_handled` between `compare_students` and `write_corrections`. Log line added: `Hidden N recently-handled students (within last 7 days). M corrections remain on Sheet 1.`
+
+### Fixed (documentation / expectation reset)
+- **Long-standing "rows stay visible forever" behavior** — Earlier docs (including my prior CHANGELOG entry in v2.4.3) said rows only disappear when SIS is updated and the pipeline re-runs. That matched the code but didn't match what users expected. Re-checked git history: no prior version ever hid handled rows (`hideRows()` in early versions was for dropdown filtering only). This release makes the product behave the way users already assumed it did.
+
+### Verified
+- Live pipeline run: 198 total corrections → 9 hidden (the test students Accept/Rejected earlier in this session) → **189 visible on Sheet 1**. Log output confirmed exact counts.
+- Accept/Reject column colors on Sheet 1: `userEnteredFormat.backgroundColorStyle` verified via Sheets API after pipeline run:
+  - Col A row 10: `#D4EDDA` (ACCEPT_BG light green) ✓
+  - Col B row 10: `#FEE2E2` (REJECT_BG light red) ✓
+  These colors persist because the v2.4.3 Code.gs only touches cols C:O on check/uncheck.
+
+### User Action Required
+- **None for v2.4.4 itself** — just let the next hourly GitHub Actions run pick it up. (Or trigger manually: https://github.com/khiemdoan-studient/weekly-corrections/actions)
+- **Still outstanding from v2.4.3**: re-paste `apps_script/Code.gs` into Extensions > Apps Script if you haven't yet. Without it, checkbox clicks still wipe the Accept/Reject column colors and create stale cumulative-tab rows.
+
 ## [v2.4.3] — 2026-04-22
 
 ### Fixed

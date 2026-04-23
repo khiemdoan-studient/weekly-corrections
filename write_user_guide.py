@@ -73,6 +73,13 @@ text = (
     "The student appears in the Rejected Changes sheet where you can add a reason.\n"
     "Checking one automatically unchecks the other.\n"
     "\n"
+    "After you check Accept or Reject, here's what happens:\n"
+    "\u2022 The data area (cols C\u2013O) greys out to show you've handled it. Cols A (Accept) and B (Reject) stay their permanent green/red \u2014 those column colors never change.\n"
+    "\u2022 Within the hour, the next automatic run of the pipeline HIDES that row from \u201cCorrected Roster Info\u201d so you don\u2019t see it again.\n"
+    "\u2022 The row stays hidden for 7 days. If the data team processes the correction within that window, the student never reappears.\n"
+    "\u2022 If the correction is NOT processed within 7 days, the student reappears on Sheet 1 \u2014 this is a signal that something\u2019s overdue. Re-check the box to re-hide and ping the data team.\n"
+    "\u2022 The row in the corresponding approval sheet (Sheet 3/4/5/6) is permanent regardless.\n"
+    "\n"
     "Important: Do not check boxes for students outside your campus. Only check corrections for "
     "schools you manage.\n"
     "\n"
@@ -217,6 +224,12 @@ text = (
     "is needed. (3) The pipeline only checks on runs \u2014 ask Khiem to run `python generate_corrections.py` "
     "or wait for the next scheduled run.\n"
     "\n"
+    "\u201cA student I accepted/rejected last week is back on Sheet 1\u201d\n"
+    "This is expected. Checked rows hide from Sheet 1 for 7 days, then reappear if the correction still hasn\u2019t been processed by the data team. Re-check your box to re-hide it. If it keeps reappearing week after week, ping Khiem.\n"
+    "\n"
+    "\u201cThe Accept or Reject column isn\u2019t green/red anymore\u201d\n"
+    "Khiem probably needs to re-paste the latest Apps Script. The v2.4.3+ version keeps those column colors permanent; older versions wiped them on every checkbox click. Ping him to re-paste.\n"
+    "\n"
     "\u201cUnenroll Queue (Live) shows #REF! or is empty\u201d\n"
     "This is a one-time authorization prompt from IMPORTRANGE. When you first open the tab, click "
     "\u201cAllow access\u201d on the pop-up. After that, data will populate within seconds and stay live going forward.\n"
@@ -353,6 +366,8 @@ for issue in [
     "\u201cMy approved correction isn\u2019t in the right sheet\u201d",
     "\u201cI see a student in Sheet 1 but not Sheet 2\u201d",
     "\u201cMy Unenroll checkbox isn\u2019t showing in the corrections list\u201d",
+    "\u201cA student I accepted/rejected last week is back on Sheet 1\u201d",
+    "\u201cThe Accept or Reject column isn\u2019t green/red anymore\u201d",
     "\u201cUnenroll Queue (Live) shows #REF! or is empty\u201d",
     "\u201cThe Date Approved column has mixed date formats\u201d",
 ]:

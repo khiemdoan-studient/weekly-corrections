@@ -29,6 +29,15 @@ The pipeline now runs **automatically every hour** via GitHub Actions — you do
 
 Manual runs via `python generate_corrections.py` still work if you ever need one off-cycle, but they aren't necessary for the normal weekly review.
 
+## Row Hide Timing (cheat sheet)
+
+| Action | Latency |
+|--------|---------|
+| Check Accept/Reject | Instant — Apps Script routes the row to the cumulative tab, greys cols C–O |
+| Row disappears from Sheet 1 | Up to 1 hour (next hourly pipeline run) |
+| Row stays hidden | 7 days |
+| Row reappears on Sheet 1 | Only if mismatch still exists in MAP vs SIS after 7 days (data team hasn't processed it) |
+
 ## How to Review Corrections
 
 1. Open the [Automated Weekly Corrections](https://docs.google.com/spreadsheets/d/12dqu58KKdsZN9nLre9Fntkk7vSILu3KfcW4WDvo5-Ls) spreadsheet
@@ -46,6 +55,13 @@ Manual runs via `python generate_corrections.py` still work if you ever need one
    - Field mismatches → **Sheet 3 ("Automated Correction List")**
    - Roster additions → **Sheet 4 ("Roster Additions")**
    - Unenrollments → **Sheet 5 ("Roster Unenrollments")**
+
+   **What happens after you check Accept or Reject:**
+   - The row gets greyed out in cols C–O (data area). Cols A (Accept) and B (Reject) stay green/red — those are the permanent column colors.
+   - Within the hour, the next automatic pipeline run will HIDE that row from "Corrected Roster Info" entirely.
+   - The row stays hidden for 7 days. After that, if the correction hasn't been processed by the data team (i.e., SIS still has the wrong value), the student reappears on Sheet 1 — this is a signal that something's overdue.
+   - If the correction WAS processed within 7 days, the student's MAP and SIS data now match, so they never reappear.
+   - The row in Sheet 3 / 4 / 5 / 6 (approval/rejection sheets) is permanent regardless.
 7. Rejected students appear in **Sheet 6 ("Rejected Changes")** — optionally add a reason in the last column
 8. Every Friday, the data team reviews all approval sheets and submits corrections
 
@@ -154,3 +170,5 @@ Each sheet has 5 filter dropdowns (Campus, Grade, Level, Student Group, Guide Em
 | Unenroll Queue (Live) shows #REF! or is empty | This is a one-time auth prompt from IMPORTRANGE. Click 'Allow access' when you see the pop-up in the sheet — the data will populate within seconds. |
 | Hourly pipeline hasn't run when expected | Check https://github.com/khiemdoan-studient/weekly-corrections/actions for any failed runs. Click 'Re-run all jobs' on a failed workflow or ask Khiem. |
 | Date column in approval sheets has mixed formats (`4/23/2026` mixed with `2026-04-23`) | Older Code.gs race condition. Run `python normalize_dates.py` once to fix historical rows, then re-paste the current `apps_script/Code.gs` to prevent future drift. |
+| A student I accepted/rejected last week is back on Sheet 1 | Expected behavior — the 7-day hide window expired. It means the data team hasn't processed the correction yet. Re-check your box to re-hide, or ping Khiem. |
+| My Accept (col A) / Reject (col B) columns are white/grey instead of green/red | You're probably running an older Apps Script. Re-paste the current `apps_script/Code.gs` from the repo into Extensions > Apps Script. The v2.4.3+ version only modifies cols C–O on checkbox click, so cols A/B keep their permanent green/red column colors. |

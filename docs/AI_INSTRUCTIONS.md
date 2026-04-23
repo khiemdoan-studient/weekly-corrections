@@ -12,7 +12,7 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `generate_corrections.py` | ~350 | Main orchestrator: auth, read MAP, query BQ, compare, write |
+| `generate_corrections.py` | ~420 | Main orchestrator: auth, read MAP, query BQ, compare, filter recently-handled, write |
 | `config.py` | ~90 | Constants, header mappings, campus list, sheet IDs |
 | `queries.py` | ~30 | Single BQ query function for alpha_roster |
 | `sheets_writer.py` | ~850 | Sheets API: hidden tabs, QUERY formulas, title/caption, filters, format |
@@ -46,6 +46,20 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | 5 | Dropdown values + Sort By dropdown (merged pairs, teal bg, data validation from _Lists) |
 | 6 | Column headers: Accept Changes, Reject Changes, Campus, Grade, ... Mismatch Summary (navy, bold white) |
 | 7+ | SORT(QUERY()) formula in C7 (filtered + sorted from _CorrData), checkboxes in A7+ (green) and B7+ (red) |
+
+### Row-Hiding on Sheet 1 (v2.4.4)
+After v2.4.4, Sheet 1 ("Corrected Roster Info") does NOT include students whose `student_id` appears in any cumulative tab (`_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData`) with a timestamp within the last `HIDE_HANDLED_DAYS` days (default 7). Pipeline flow:
+1. `compare_students` returns ALL current mismatches (unchanged)
+2. `main()` reads handled IDs via `read_handled_student_ids(sheets_service, HIDE_HANDLED_DAYS)`
+3. `_hide_recently_handled(corrections_map, corrections_sis, handled_ids)` filters parallel lists
+4. Filtered lists are passed to `write_corrections` → `_CorrData` only contains unhandled students → Sheet 1 QUERY output shrinks
+
+Hide-then-reappear semantics:
+- Accepted/rejected student's timestamp < 7 days old → excluded from `_CorrData` → not on Sheet 1
+- After 7 days, if mismatch still exists in MAP vs SIS → student reappears on Sheet 1 (signal: correction is stale, data team hasn't processed)
+- After 7 days, if SIS updated → student naturally absent (no mismatch to flag)
+
+Timestamp parsing: `datetime.strptime(row[0].strip(), "%Y-%m-%d %H:%M:%S")`. Rows with unparseable timestamps (e.g. legacy `4/23/2026` format from pre-v2.4.2 races) are silently skipped — treated as unhandled. `normalize_dates.py` should be run if there's a mix.
 
 ### Sheet 2: "Current Roster Info in SIS" (same layout, no checkboxes)
 Same title/caption/filter/sort rows. SORT(QUERY()) formula in A7 pulls from `_SISData`.
@@ -196,6 +210,10 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 | Student_ID | Student ID | fullid | Col11 |
 | External Student ID | SUNS Number | externalstudentid | Col12 |
 
+## Configuration Constants
+
+- `HIDE_HANDLED_DAYS = 7` in `config.py` — Tunable window for row-hiding on Sheet 1. Set to 0 to disable and restore always-show-everything behavior.
+
 ## Key Design Decisions
 
 1. **QUERY formulas for filtering** — Apps Script `hideRows()` approach failed because it couldn't map dropdown positions to data columns. QUERY formulas auto-recalculate when dropdown cells change.
@@ -207,6 +225,7 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 7. **Three-level unenroll chain** — IM checks SR checkbox → formula mirrors to MR → IMPORTRANGE pushes to CMR → pipeline reads CMR Unenroll via `MAP_HEADER_MAP` auto-detection. No Apps Script needed.
 8. **Hybrid real-time + hourly architecture** — Sheets-only live queue for instant IM feedback (bypass BQ); full pipeline on GitHub Actions hourly schedule for SIS comparison. No pure-Sheets solution exists because Sheets can't query BigQuery.
 9. **Pre-formatted ISO date strings in Code.gs** — Instead of `appendRow([new Date(), ...])` + post-write `setNumberFormat`, we pre-compute the date string via `Utilities.formatDate` and append the raw string. This is race-safe under concurrent onEdit triggers (Apps Script can fire multiple concurrent instances when a user toggles multiple checkboxes quickly). onEdit triggers are simple triggers (not installable), fire synchronously per edit, but Google may invoke multiple in parallel when edits happen within milliseconds. Trade-off: the column now stores strings, not serial dates, so numeric date sort relies on the ISO format being lexicographically equivalent to chronological order (it is).
+10. **Hide accepted/rejected rows for 7 days** — Previously, Sheet 1 always showed every current mismatch, including students who had already been Accept'd or Reject'd. After handling, the pipeline rebuild cleared the checkbox but re-pulled the student, which confused IMs ("I already checked this, why is it back?"). v2.4.4 filters out students handled within `HIDE_HANDLED_DAYS`. After the window, if the mismatch still exists, the student reappears — which signals that the data team hasn't processed the correction yet. This behavior aligned with user expectation even though no prior version had implemented it.
 
 ## Common Bugs & Fixes
 
@@ -230,6 +249,8 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 | Pipeline silently misses CMR Unenroll column | Default `A1:AC` range stopped at col 29 (AC). Unenroll is at col AD (29) for 7 campuses. | Expanded to `A1:AE` in `read_map_roster` |
 | Live Queue shows `#REF!` or empty | IMPORTRANGE needs one-time human auth in the destination spreadsheet | User opens the tab and clicks 'Allow access' on the prompt |
 | Inconsistent date formats in cumulative tabs | Apps Script race: `setNumberFormat(getLastRow(), 1)` fired by concurrent onEdit triggers applies to wrong row, leaving some rows in locale default (`4/23/2026 1:37:44`) and others in ISO (`2026-04-23 01:37:44`). Breaks chronological sort. | Code.gs now pre-formats the date as ISO string via `Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss")` BEFORE appendRow, eliminating the race. For historical data: `normalize_dates.py` migrates existing rows. |
+| Accept/Reject col A/B colors missing after checkbox click | Pre-v2.4.3 Code.gs called `setBackground(null)` on cols 1–15, wiping the permanent `#D4EDDA` / `#FEE2E2` applied by `sheets_writer.py`. Pipeline run re-applies them, but Apps Script wipes them again on next click. | Re-paste v2.4.3+ Code.gs — it only touches cols 3–15 (C:O), leaving A/B untouched. |
+| Handled students keep reappearing on Sheet 1 | Pipeline had no handled-state tracking. | v2.4.4 `read_handled_student_ids` + `_hide_recently_handled` exclude them. |
 
 ## Known Limitations
 
