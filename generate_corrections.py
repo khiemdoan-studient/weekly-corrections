@@ -23,7 +23,9 @@ from config import (
     CAMPUS_SHEETS,
     MAP_HEADER_MAP,
     OUTPUT_FIELDS,
+    HIDE_HANDLED_DAYS,
 )
+from datetime import datetime, timedelta
 from queries import query_alpha_roster
 from sheets_writer import write_corrections
 
@@ -410,6 +412,66 @@ def _normalize(val):
     return " ".join(str(val).strip().lower().split())
 
 
+# ── Recently-handled filter ────────────────────────────────────────────────
+
+
+def read_handled_student_ids(sheets_service, days_back):
+    """Return set of student_ids handled (accepted or rejected) within the last
+    `days_back` days. Used to hide recently-actioned students from Sheet 1 so
+    IMs don't re-review the same correction while the data team processes it.
+
+    Reads date (col A) and student_id (col M) from all 4 cumulative tabs.
+    Supports canonical "yyyy-MM-dd HH:mm:ss" format — rows with unparseable
+    dates are silently skipped (treated as unhandled).
+    """
+    if days_back <= 0:
+        return set()
+
+    cutoff = datetime.now() - timedelta(days=days_back)
+    handled = set()
+
+    for tab in ["_ApprovedData", "_AdditionsData", "_UnenrollData", "_RejectedData"]:
+        try:
+            resp = (
+                sheets_service.spreadsheets()
+                .values()
+                .get(spreadsheetId=OUTPUT_SPREADSHEET_ID, range=f"'{tab}'!A:M")
+                .execute()
+            )
+        except Exception:
+            continue
+
+        for row in resp.get("values", []):
+            if len(row) < 13:
+                continue
+            date_str = str(row[0] or "").strip()
+            sid = str(row[12] or "").strip()
+            if not date_str or not sid:
+                continue
+            try:
+                dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+            if dt >= cutoff:
+                handled.add(sid)
+
+    return handled
+
+
+def _hide_recently_handled(corrections_map, corrections_sis, handled_ids):
+    """Filter parallel lists to drop students whose student_id is in handled_ids."""
+    if not handled_ids:
+        return corrections_map, corrections_sis
+    kept_map = []
+    kept_sis = []
+    for m, s in zip(corrections_map, corrections_sis):
+        if m.get("Student_ID", "") in handled_ids:
+            continue
+        kept_map.append(m)
+        kept_sis.append(s)
+    return kept_map, kept_sis
+
+
 # ── Main ───────────────────────────────────────────────────────────────────
 
 
@@ -435,6 +497,22 @@ def main():
     corrections_map, corrections_sis = compare_students(
         map_enrolled, map_non_enrolled, sis_students
     )
+
+    # Hide recently-handled students (checked Accept or Reject in the last N days)
+    # so IMs don't re-review the same correction while the data team processes it.
+    if HIDE_HANDLED_DAYS > 0:
+        handled_ids = read_handled_student_ids(sheets_service, HIDE_HANDLED_DAYS)
+        if handled_ids:
+            before = len(corrections_map)
+            corrections_map, corrections_sis = _hide_recently_handled(
+                corrections_map, corrections_sis, handled_ids
+            )
+            hidden = before - len(corrections_map)
+            print(
+                f"  Hidden {hidden} recently-handled students "
+                f"(within last {HIDE_HANDLED_DAYS} days). "
+                f"{len(corrections_map):,} corrections remain on Sheet 1."
+            )
 
     # Write to output spreadsheet
     print_step("4. WRITING TO CORRECTIONS SPREADSHEET")

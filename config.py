@@ -127,6 +127,16 @@ ISR_CONFIG = {
 }
 
 # ── Output sheet tab names ──────────────────────────────────────────────────
+# ── Row-hiding behavior ────────────────────────────────────────────────────
+# Students who've been Accept'd or Reject'd within this many days are hidden
+# from Sheet 1 "Corrected Roster Info" on the next pipeline run. This prevents
+# IMs from re-reviewing the same correction while the data team processes it.
+# After HIDE_HANDLED_DAYS elapses, if the mismatch still exists in MAP vs SIS,
+# the student reappears on Sheet 1 (signal that the correction hasn't been
+# processed yet).
+HIDE_HANDLED_DAYS = 7
+
+# ── Output sheet tab names ──────────────────────────────────────────────────
 TAB_CORRECTED = "Corrected Roster Info"
 TAB_SIS = "Current Roster Info in SIS"
 TAB_APPROVED = "Automated Correction List"
