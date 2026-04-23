@@ -1,5 +1,23 @@
 # Changelog
 
+## [v2.4.3] — 2026-04-22
+
+### Fixed
+- **onOpen trigger deleted error** — User pasted v2.4.2 Code.gs (which had no `onOpen`) into an ISR that had a pre-existing Student Cards `onOpen` menu trigger. Google's trigger system kept firing but the function was gone. Resolved by merging the Student Cards generator (`onOpen` + `generateStudentCardsFromTemplate` + helpers) into the same Code.gs file. The merged Code.gs is safe to paste in either the corrections spreadsheet OR any ISR — each feature activates only when its sheet tab is present.
+- **Duplicate rows across cumulative tabs when toggling** — User clicked Reject → unchecked → Accept. Student (Allyssa Fortiz-Santos 083-11509) ended up in BOTH `_RejectedData` and `_UnenrollData`. Root cause: `appendRow` always added, never removed. Fix: new `removeStudentFromCumulativeTabs_()` runs before every append, deleting any existing rows for that `student_id` across all 4 cumulative tabs. Idempotent — toggle as many times as you want, only the latest choice persists. Cleaned the Allyssa duplicate manually.
+- **Accept/Reject column colors wiped on uncheck** — Previous version called `sheet.getRange(row, 1, 1, 15).setBackground(null)` which reset the permanent green/red on cols A/B. Fix: only touch cols C:O (cols 3–15) for backgrounds; cols A and B keep their column-level `ACCEPT_BG` / `REJECT_BG` applied by `sheets_writer.py`.
+
+### Changed
+- **Code.gs structure** — Now a single file with both features clearly delineated:
+  - Feature 1: onEdit (accept/reject) — only activates on "Corrected Roster Info" sheet
+  - Feature 2: onOpen (Student Cards menu) — only shows up on spreadsheets with a "Copy of MAP Roster" tab
+
+### User Action Required
+- Re-paste the latest `apps_script/Code.gs` into Extensions > Apps Script in your spreadsheet (wherever the `onOpen` error was firing). The paste is idempotent.
+
+### Notes
+- **How long do accepted/rejected rows take to disappear from Corrected Roster Info?** They don't disappear instantly. When you check Accept or Reject, the row is greyed out on Sheet 1 and the data is copied to the cumulative tab. The row only leaves Sheet 1 when (a) the data team updates SIS to match MAP and (b) the next hourly pipeline run re-reads the CMR + BQ and no longer sees a mismatch. Worst case: data team processes on Friday → row disappears from Sheet 1 within the hour. Best case: if SIS updates overnight, the row is gone by next morning's pipeline run.
+
 ## [v2.4.2] — 2026-04-22
 
 ### Fixed
