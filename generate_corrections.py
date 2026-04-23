@@ -73,7 +73,7 @@ def read_map_roster(sheets_service):
 
     for sheet_name in CAMPUS_SHEETS:
         # Read entire sheet including header row
-        range_str = f"'{sheet_name}'!A1:AC"
+        range_str = f"'{sheet_name}'!A1:AE"
         try:
             resp = (
                 sheets_service.spreadsheets()
