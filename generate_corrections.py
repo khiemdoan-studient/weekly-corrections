@@ -201,9 +201,24 @@ def _combine_name(first, last):
 
 
 def read_sis_data(bq_client):
-    """Query SIS data from BigQuery and return dict keyed by student_id."""
+    """Query SIS data from BigQuery and return dict keyed by student_id.
+
+    Raises:
+        SystemExit: if BigQuery query fails. Displays actionable error message
+        directing user to check the alpha_roster table exists and the service
+        account has bigquery.jobs.create + bigquery.tables.getData permissions.
+    """
     print_step("2. QUERYING SIS DATA FROM BIGQUERY")
-    rows = query_alpha_roster(bq_client, BQ_PROJECT, BQ_DATASET, BQ_TABLE)
+    try:
+        rows = query_alpha_roster(bq_client, BQ_PROJECT, BQ_DATASET, BQ_TABLE)
+    except Exception as e:
+        print(f"\n  ERROR: BigQuery query failed: {e}")
+        print(
+            f"  Check that `{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}` exists and the "
+            f"service account has bigquery.jobs.create + bigquery.tables.getData. "
+            f"If the table is missing, run `run_export.ps1` to recreate it."
+        )
+        sys.exit(1)
 
     students = {}
     for row in rows:
@@ -298,7 +313,15 @@ def compare_students(map_enrolled, map_non_enrolled, sis_students):
             match_count += 1
 
     # ── Non-enrolled MAP students vs SIS (unenrolling detection) ──────
+    # Skip student_ids already processed in the enrolled loop to avoid double-counting
+    already_processed = {rec["Student_ID"] for rec in corrections_map}
     for student_id, map_rec in sorted(map_non_enrolled.items()):
+        if student_id in map_enrolled or student_id in already_processed:
+            print(
+                f"    NOTE: student_id {student_id} is both enrolled and non-enrolled "
+                f"across campus sheets — skipping unenrolling check"
+            )
+            continue
         sis_rec = sis_students.get(student_id)
         if sis_rec is None:
             continue  # not in SIS either — nothing to flag

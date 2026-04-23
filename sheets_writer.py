@@ -797,9 +797,9 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
                 "range": {
                     "sheetId": uid,
                     "startRowIndex": 0,
-                    "endRowIndex": 100,
+                    "endRowIndex": 1000,
                     "startColumnIndex": 0,
-                    "endColumnIndex": 30,
+                    "endColumnIndex": 50,
                 }
             }
         }
