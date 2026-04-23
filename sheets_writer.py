@@ -1259,7 +1259,11 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
             }
         )
 
-    # Date format on Sheets 3/4/5/6 col A (QUERY strips number formatting)
+    # Date format on Sheets 3/4/5/6 col A (QUERY strips number formatting).
+    # Audit fix 2026-04-23: cumulative tabs grow unbounded — the old 1006-row
+    # hard ceiling would eventually be hit (~5 weeks at 200 mismatches/week with
+    # a 7-day hide window). 10_000 rows gives ~2 years of headroom; re-evaluate
+    # if any cumulative tab approaches that.
     for date_sheet_id in [sheet3_id, sheet4_id, sheet5_id, sheet6_id]:
         fmt.append(
             {
@@ -1267,7 +1271,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
                     "range": {
                         "sheetId": date_sheet_id,
                         "startRowIndex": 6,
-                        "endRowIndex": 1006,
+                        "endRowIndex": 10_000,
                         "startColumnIndex": 0,
                         "endColumnIndex": 1,
                     },
@@ -1485,7 +1489,11 @@ def _format_visible_sheet(
         fmt.append(_cw(sheet_id, offset + len(field_widths), 200))  # Mismatch Summary
 
     # ── Alternating row colors ────────────────────────────────────────
-    end_row = max(6 + num_data_rows + 5, 206)
+    # Audit fix 2026-04-23: floor was 206 (harmless on Sheet 1/2 since num_data_rows
+    # is the mismatch count, but Sheets 3-6 always pass num_data_rows=0 so banding
+    # maxed at row 206 and ran out once cumulative tabs grew past ~200 rows). Bump
+    # to 2000 — banding on empty rows is harmless and covers years of growth.
+    end_row = max(6 + num_data_rows + 5, 2000)
     fmt.append(
         {
             "addBanding": {

@@ -1,5 +1,20 @@
 # Changelog
 
+## [v2.4.5] — 2026-04-23
+
+### Fixed
+- **`sheets_writer.py:1270` — hardcoded 1006-row ceiling on cumulative-tab date formatting** — The date-format `repeatCell` on Sheets 3/4/5/6 (col A) stopped at `endRowIndex: 1006`. Once any cumulative tab (`_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData`) grew past ~1000 rows, new entries would render as raw numbers (e.g. `45768.0557`) instead of `yyyy-MM-dd HH:mm:ss`, breaking chronological sort on approval sheets. Raised ceiling to `10_000` — ~2 years of headroom at 200 mismatches/week.
+- **`sheets_writer.py:1488` — hardcoded 206-row banding floor on Sheets 3-6** — `_format_visible_sheet` was called with `num_data_rows=0` for Sheets 3-6, so `end_row = max(6+0+5, 206) = 206`. Alternating row colors would stop at row 206 once cumulative tabs grew past ~200 rows. Raised floor to `2000`. Banding on empty rows is harmless.
+
+### Why
+Found by `/audit` after v2.4.4 shipped. Both are latent issues — current cumulative tabs are well under 1000 rows, so no visible effect yet. Fixes prevent future failures without requiring any user action.
+
+### Verified
+- Code-level only (constant bumps, no logic change). Next hourly GitHub Actions run will apply the new ranges to the live sheet automatically.
+
+### User Action Required
+- None. Fix takes effect on next hourly pipeline run.
+
 ## [v2.4.4] — 2026-04-22
 
 ### Added
