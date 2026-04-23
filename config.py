@@ -57,6 +57,73 @@ MAP_HEADER_MAP = {
     "guide_last": {"teacher 1 last name", "teacher_last"},
     "guide_email": {"teacher 1 email", "teacher_email"},
     "ext_student_id": {"suns number", "external student id", "suns #", "external id"},
+    "unenroll": {"unenroll", "unenrolled"},
+}
+
+# ── ISR (Individual Student Roster) configuration ──────────────────────────
+# Each campus has a dedicated Google Sheet ("ISR") containing:
+#   - "Student Roster" tab (SR) — IMs edit directly
+#   - "MAP Roster" tab (MR) — formula-derived view that feeds the CMR
+#   - "Auto Synced from SIS" — SIS admission status dump
+# The ISR's MR tab is pulled into the Combined MAP Roster (CMR) via IMPORTRANGE.
+#
+# Per-ISR column positions (as of v2.3.0 audit). `sr_unenroll_col` is 0-based
+# index. `mr_unenroll_col` is where we write the new Unenroll mirror column.
+ISR_CONFIG = {
+    "Reading CCSD (Dash)": {
+        "isr_id": "1b28bgPy9mysb31Op01DPL6IS5jhMZy51VKVSsS0feII",
+        "mr_gid": 1256615349,
+        "sr_unenroll_col": 23,  # col X — already exists
+        "mr_unenroll_col": 30,  # col AE — new
+    },
+    "Metro Schools (Dash)": {
+        "isr_id": "1Eri0B_WMmjJxPs6SYszK2F1jJt08rjPFRwgrpuKdakU",
+        "mr_gid": 438424229,
+        "sr_unenroll_col": 24,  # col Y — already exists as "Unenrolled"
+        "mr_unenroll_col": 27,  # col AB — new
+    },
+    "Allendale Fairfax Elementary School (Dash)": {
+        "isr_id": "1zhWCgoJB9WXA9sDxnHj0uZbHQaWTiMFk3bLP61rUKWo",
+        "mr_gid": 1256615349,
+        "sr_unenroll_col": 25,  # col Z — already exists
+        "mr_unenroll_col": 27,  # col AB — new
+    },
+    "Allendale Fairfax Middle School (Dash)": {
+        "isr_id": "1r6o0j8ENz01gt9L5ygJLBZAtwCD-L9H2SrutgZyTfQc",
+        "mr_gid": 1256615349,
+        "sr_unenroll_col": 25,  # col Z — already exists
+        "mr_unenroll_col": 27,  # col AB — new
+    },
+    "Allendale Aspire Academy (Dash)": {
+        "isr_id": "10H5y0Z3_QAH9wYH5V80yLSLuqWPKpDXf5k7wDMz7hww",
+        "mr_gid": 1256615349,
+        "sr_unenroll_col": 27,  # col AB — already exists
+        "mr_unenroll_col": 27,  # col AB — new
+    },
+    "Hardeeville Elementary School (Dash)": {
+        "isr_id": "1waahGamoiMb5DkLF1_IlO5kEhpcc9g7NZr3WIeiAfFw",
+        "mr_gid": 1256615349,
+        "sr_unenroll_col": 27,  # col AB — NEEDS TO BE ADDED
+        "mr_unenroll_col": 29,  # col AD — new
+    },
+    "Hardeeville Junior & Senior High School (Dash)": {
+        "isr_id": "1g8KUreiGlBd2NM5huZjSSDA30YdDD8kL0geUJb0Ajww",
+        "mr_gid": 1256615349,
+        "sr_unenroll_col": 27,  # col AB — NEEDS TO BE ADDED
+        "mr_unenroll_col": 29,  # col AD — new
+    },
+    "Ridgeland Elementary School (Dash)": {
+        "isr_id": "1IwGsdtThjQJmcfbh_eR5ZrFKQiCj9FL5GR02geRofWQ",
+        "mr_gid": 1256615349,
+        "sr_unenroll_col": 27,  # col AB — NEEDS TO BE ADDED
+        "mr_unenroll_col": 29,  # col AD — new
+    },
+    "Ridgeland Secondary Academy of Excellence (Dash)": {
+        "isr_id": "1AT4jEZPbaYdFJUI8OTAVIgHOs4cjCY6zh96I7uMvZZM",
+        "mr_gid": 1256615349,
+        "sr_unenroll_col": 27,  # col AB — NEEDS TO BE ADDED
+        "mr_unenroll_col": 29,  # col AD — new
+    },
 }
 
 # ── Output sheet tab names ──────────────────────────────────────────────────

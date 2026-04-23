@@ -136,6 +136,10 @@ def read_map_roster(sheets_service):
             guide_first = _safe_get(row, col_map.get("guide_first"))
             guide_last = _safe_get(row, col_map.get("guide_last"))
 
+            # IM-driven Unenroll checkbox (TRUE string, Python bool, or "TRUE")
+            unenroll_raw = _safe_get(row, col_map.get("unenroll"))
+            unenroll_flag = unenroll_raw.strip().upper() == "TRUE"
+
             record = {
                 "Campus": _safe_get(row, col_map.get("campus")),
                 "Grade": _safe_get(row, col_map.get("grade")),
@@ -150,6 +154,7 @@ def read_map_roster(sheets_service):
                 "Student_ID": student_id,
                 "External Student ID": _safe_get(row, col_map.get("ext_student_id")),
                 "Guide Name": _combine_name(guide_first, guide_last),
+                "_unenroll_flag": unenroll_flag,  # IM-driven; option C precedence
             }
 
             if notes.lower() == "enrolled":
@@ -266,14 +271,16 @@ def _split_name(full_name):
 def compare_students(map_enrolled, map_non_enrolled, sis_students):
     """Compare MAP roster against SIS data, return mismatched students.
 
-    Three mismatch categories:
-    1. "Roster Addition" — student Enrolled in MAP, not found in SIS at all
-    2. Field mismatches — student Enrolled in both, fields differ (e.g. "Grade, Email")
-    3. "Unenrolling" — student NOT Enrolled in MAP, but Enrolled in SIS
+    Four detection paths (option-C precedence):
+    1. IM-flagged Unenroll checkbox TRUE + SIS still Enrolled → "Unenrolling"
+       (highest priority — takes precedence over field mismatches)
+    2. "Roster Addition" — enrolled in MAP, not found in SIS
+    3. Field mismatches — enrolled in both, specific fields differ
+    4. Notes-based "Unenrolling" — not Enrolled in MAP (via Notes col),
+       but SIS admissionstatus=Enrolled
 
     Returns:
-        (corrections_map, corrections_sis) — parallel lists of dicts for
-        Sheet 1 (MAP data) and Sheet 2 (SIS data), only for mismatched students.
+        (corrections_map, corrections_sis) — parallel lists of dicts.
     """
     print_step("3. COMPARING MAP ROSTER vs SIS DATA")
 
@@ -283,10 +290,27 @@ def compare_students(map_enrolled, map_non_enrolled, sis_students):
     roster_addition_count = 0
     field_mismatch_count = 0
     unenroll_count = 0
+    im_flagged_unenroll_count = 0
 
     # ── Enrolled MAP students vs SIS ──────────────────────────────────
     for student_id, map_rec in sorted(map_enrolled.items()):
         sis_rec = sis_students.get(student_id)
+
+        # Option-C: IM-flagged Unenroll trumps field mismatches.
+        # If Unenroll=TRUE on CMR AND SIS still shows Enrolled → flag as Unenrolling.
+        if map_rec.get("_unenroll_flag"):
+            if (
+                sis_rec
+                and sis_rec.get("admissionstatus", "").strip().lower() == "enrolled"
+            ):
+                map_rec_copy = dict(map_rec)
+                map_rec_copy["mismatch_summary"] = "Unenrolling"
+                corrections_map.append(map_rec_copy)
+                corrections_sis.append(dict(sis_rec))
+                im_flagged_unenroll_count += 1
+                unenroll_count += 1
+                continue
+            # If IM flagged but SIS already not-enrolled, nothing to flag — SIS matches.
 
         if sis_rec is None:
             # Student enrolled in MAP but not in SIS → Roster Addition
@@ -338,7 +362,10 @@ def compare_students(map_enrolled, map_non_enrolled, sis_students):
     print(f"  Matches (no correction needed): {match_count:,}")
     print(f"  Roster Additions (not in SIS): {roster_addition_count:,}")
     print(f"  Field mismatches: {field_mismatch_count:,}")
-    print(f"  Unenrolling: {unenroll_count:,}")
+    print(
+        f"  Unenrolling: {unenroll_count:,} "
+        f"(IM-flagged: {im_flagged_unenroll_count:,}, Notes-based: {unenroll_count - im_flagged_unenroll_count:,})"
+    )
     print(f"  Total corrections: {len(corrections_map):,}")
 
     return corrections_map, corrections_sis
