@@ -145,7 +145,28 @@ text = (
     "The mismatch data refreshes automatically when the dashboard pipeline runs. New mismatches "
     "appear as student data changes in either the MAP roster or SIS.\n"
     "\n"
-    "PART 5: FIELDS COMPARED\n"
+    "PART 5: UNENROLLING A STUDENT (NEW)\n"
+    "\n"
+    "If a student has left your campus and needs to be unenrolled from the SIS, you can now flag "
+    "them directly from your campus\u2019s Student Roster spreadsheet.\n"
+    "\n"
+    "How it works\n"
+    "\u2022 Open your campus\u2019s Student Roster spreadsheet (the one that feeds the MAP roster).\n"
+    "\u2022 Find the student\u2019s row on the \u201cStudent Roster\u201d tab.\n"
+    "\u2022 Check the \u201cUnenroll\u201d checkbox in the last column.\n"
+    "\u2022 Within a minute, the checkmark propagates through your MAP Roster tab into the main MAP roster sheet.\n"
+    "\u2022 The next time the weekly correction pipeline runs, the student will appear in the \u201cRoster Unenrollments\u201d sheet for the data team to process.\n"
+    "\n"
+    "Important rules\n"
+    "\u2022 Leave the checkbox CHECKED after unenrollment \u2014 it\u2019s a permanent historical record.\n"
+    "\u2022 Do not delete the row. Unchecking or deleting will NOT reverse an unenrollment that\u2019s already been processed.\n"
+    "\u2022 If the student is both unenrolled by you AND has field mismatches (e.g. wrong grade), the Unenroll takes priority \u2014 we process the unenrollment, not the field changes.\n"
+    "\n"
+    "When your checkbox won\u2019t trigger an Unenrolling entry\n"
+    "\u2022 If the SIS already has the student as not-enrolled, there\u2019s nothing to correct \u2014 the system stays quiet.\n"
+    "\u2022 If you check Unenroll on a student that\u2019s still enrolled everywhere, expect them to show up in \u201cRoster Unenrollments\u201d on the next pipeline run.\n"
+    "\n"
+    "PART 6: FIELDS COMPARED\n"
     "\n"
     "The system compares these 10 fields between MAP roster and SIS:\n"
     "\u2022 Campus\n"
@@ -162,7 +183,7 @@ text = (
     "If any of these fields differ between the MAP roster and SIS, the student appears in the "
     "corrections sheet.\n"
     "\n"
-    "PART 6: TROUBLESHOOTING\n"
+    "PART 7: TROUBLESHOOTING\n"
     "\n"
     "\u201cI don\u2019t see my campus in the dropdown\u201d\n"
     "Your campus may not have any mismatched students this week. If all data matches between "
@@ -187,6 +208,12 @@ text = (
     "The student exists in the MAP roster but was not found in the SIS at all. Sheet 2 will "
     "show \u201cNOT FOUND IN SIS\u201d for that student. The Mismatch Summary will say \u201cRoster Addition\u201d "
     "(highlighted green).\n"
+    "\n"
+    "\u201cMy Unenroll checkbox isn\u2019t showing in the corrections list\u201d\n"
+    "Three things to check: (1) IMPORTRANGE can take up to a minute to refresh \u2014 wait and reload. "
+    "(2) Make sure the SIS still has the student as Enrolled \u2014 if it already matches, no correction "
+    "is needed. (3) The pipeline only checks on runs \u2014 ask Khiem to run `python generate_corrections.py` "
+    "or wait for the next scheduled run.\n"
 )
 
 requests.append({"insertText": {"location": {"index": 1}, "text": text}})
@@ -230,8 +257,9 @@ for title in [
     "PART 2: WHAT EACH SHEET DOES",
     "PART 3: DROPDOWN FILTERS AND SORTING",
     "PART 4: WEEKLY WORKFLOW",
-    "PART 5: FIELDS COMPARED",
-    "PART 6: TROUBLESHOOTING",
+    "PART 5: UNENROLLING A STUDENT (NEW)",
+    "PART 6: FIELDS COMPARED",
+    "PART 7: TROUBLESHOOTING",
 ]:
     i = text.find(title)
     if i >= 0:
@@ -261,6 +289,9 @@ for title in [
     "Monday through Thursday",
     "Friday",
     "Automatic refresh",
+    "How it works",
+    "Important rules",
+    "When your checkbox won\u2019t trigger an Unenrolling entry",
 ]:
     # Find within appropriate section to avoid duplicates
     i = text.find(title + "\n")
@@ -310,6 +341,7 @@ for issue in [
     "\u201cThe data looks stale\u201d",
     "\u201cMy approved correction isn\u2019t in the right sheet\u201d",
     "\u201cI see a student in Sheet 1 but not Sheet 2\u201d",
+    "\u201cMy Unenroll checkbox isn\u2019t showing in the corrections list\u201d",
 ]:
     i = text.find(issue)
     if i >= 0:

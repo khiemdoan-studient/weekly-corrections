@@ -1,5 +1,26 @@
 # Changelog
 
+## [v2.3.0] — 2026-04-22
+
+### Added
+- **IM-driven Unenroll workflow spanning 3 sheet levels** — ISR (Individual Student Roster, 1 per campus, 9 total) → CMR (Combined MAP Roster, 9 campus tabs) → Pipeline (`generate_corrections.py` reads CMR, compares to BigQuery `alpha_roster`). IMs check an Unenroll checkbox on their campus SR tab; the MR tab mirrors via formula; the CMR pulls via IMPORTRANGE; the pipeline reads the flag and flags the student as "Unenrolling".
+- **Per-campus `ISR_CONFIG` in `config.py`** — Maps each campus tab name to its ISR spreadsheet ID, MAP Roster gid, SR Unenroll column index, and MR Unenroll column index. Column mapping established:
+  - Reading CCSD: SR col X[23], MR col AE[30]
+  - Metro Schools: SR col Y[24], MR col AB[27]
+  - Allendale Fairfax Elementary / Middle: SR col Z[25], MR col AB[27]
+  - Allendale Aspire Academy: SR col AB[27], MR col AB[27]
+  - Hardeeville Elementary / Junior-Senior High, Ridgeland Elementary / Secondary: SR col AB[27] (added), MR col AD[29]
+- **`setup_unenroll_columns.py`** — One-time provisioning script: creates SR Unenroll checkbox column, MR mirror formula (`=ArrayFormula(SR!Xn)`), and CMR IMPORTRANGE formula across all 9 ISRs. Idempotent.
+- **"unenroll" added to `MAP_HEADER_MAP`** — Recognizes headers "unenroll" and "unenrolled" when reading CMR.
+- **`_unenroll_flag` on each student record** — `read_map_roster()` now reads the Unenroll column (TRUE/FALSE) into each student record for downstream comparison.
+- **Option-C precedence in `compare_students()`** — If IM-flagged `Unenroll=TRUE` AND SIS `admissionstatus=Enrolled`, student is flagged as "Unenrolling" and this takes precedence over any field mismatches. Also prints a breakdown of IM-flagged vs Notes-based unenrollings at the end of the run.
+
+### Fixed
+- **Setup script edge cases** — Handles Google Sheets Tables "typed columns" (skips `setDataValidation` because the Table already provides checkbox rendering) and grid-size expansion (`appendDimension COLUMNS`) for SRs that only had 27 columns before the Unenroll column could be added.
+
+### Notes
+- Setup script successfully ran: all 9 ISRs provisioned, all 9 CMR Unenroll columns wired with IMPORTRANGE, rendering live FALSE values. 0 IM-flagged unenrollments so far, as expected since no IM has checked any boxes yet.
+
 ## [v2.2.0] — 2026-04-17
 
 ### Fixed

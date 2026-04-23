@@ -20,6 +20,7 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | `write_user_guide.py` | ~215 | Google Docs API: write formatted user guide |
 | `run_export.ps1` | ~70 | One-time: Athena CTAS → S3 → GCS → BQ for alpha_roster |
 | `alpha_roster_ctas.sql` | ~30 | Athena SQL with dedup, handles reserved word "group" |
+| `setup_unenroll_columns.py` | ~150 | One-time: provision Unenroll columns on all 9 ISRs + CMR. Idempotent — safe to re-run |
 
 ## Spreadsheet Architecture
 
@@ -54,6 +55,48 @@ Same title/caption/filter/sort rows. SORT(QUERY()) formula in A7 pulls from hidd
 
 ### Sheet 6: "Rejected Changes" (15 cols: Date + Mismatch Summary + 12 fields + Reason)
 Same as Sheets 3-5 but with extra "Reason for Rejection" column (col O, blank for manual entry). QUERY reads `_RejectedData` A:N (14 cols); Reason is outside QUERY output.
+
+## ISR (Individual Student Roster) Architecture
+
+Each of 9 campuses has a dedicated Google Sheet called an ISR (Individual Student Roster). The ISRs feed the CMR (Consolidated MAP Roster), which in turn feeds the pipeline.
+
+### ISR Tab Layout
+- **`Student Roster` (SR)** — IMs edit here directly. Has an Unenroll checkbox column.
+- **`MAP Roster` (MR)** — formula-derived view, not manually maintained. Values pull from:
+  - `SR` via cell references (e.g. `='Student Roster'!H2`)
+  - `Auto Synced from SIS` via VLOOKUP (Notes col O = SIS admission status)
+  - Some plain values
+  - MR is the tab that feeds the CMR via IMPORTRANGE.
+- **`Auto Synced from SIS`** — SIS admission status dump (not directly maintained by IMs).
+- **`School Info`** — Campus name to ID mapping for student_id derivation.
+
+### Data Flow
+```
+SR (IM edits) ──formulas──> MR ──IMPORTRANGE──> CMR ──Python Sheets API──> generate_corrections.py
+```
+
+### ISR_CONFIG in config.py
+Per-campus column positions are hard-coded in `config.py::ISR_CONFIG` with keys:
+- `isr_id` — Google Sheet ID of the ISR
+- `mr_gid` — gid of the `MAP Roster` tab
+- `sr_unenroll_col` — 0-indexed column position of Unenroll on the SR tab
+- `mr_unenroll_col` — 0-indexed column position of Unenroll on the MR tab
+
+All 9 campuses are listed, each with their own SR/MR Unenroll column indices (positions vary because column layouts differ across campus sheets).
+
+## Unenroll Workflow (option-C precedence)
+
+Every student record in `read_map_roster` gets a `_unenroll_flag` boolean read from the CMR Unenroll column. In `compare_students`, for each ENROLLED MAP student, the logic is:
+
+1. **FIRST check (option-C precedence)**: if `_unenroll_flag=TRUE` AND SIS `admissionstatus=Enrolled` → flag as `"Unenrolling"` and skip all other checks.
+2. **Fall through**: otherwise, run existing checks — Roster Addition, Field mismatch, Notes-based Unenrolling.
+
+**Option-C precedence** means the IM-driven Unenroll checkbox trumps field mismatches — we'd rather process the unenrollment than flag a grade/email change on a student who is about to be unenrolled anyway.
+
+The pipeline prints a breakdown to stdout:
+```
+Unenrolling: N (IM-flagged: X, Notes-based: Y)
+```
 
 ## Filtering & Sorting Mechanism
 
@@ -135,6 +178,7 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 4. **Checkbox stale-clearing** — When a dropdown changes, Apps Script clears both col A and col B checkboxes because QUERY output rows shift.
 5. **Header auto-detection** — Handles schema differences across campus sheets.
 6. **Batched API pre-writes** — Tab existence (1 read + 1 batch create), unmergeCells (1 batched call for all 6 sheets), clear values (`batchClear` for 9 tabs). ~5 pre-write API calls total instead of ~28.
+7. **Three-level unenroll chain** — IM checks SR checkbox → formula mirrors to MR → IMPORTRANGE pushes to CMR → pipeline reads CMR Unenroll via `MAP_HEADER_MAP` auto-detection. No Apps Script needed.
 
 ## Common Bugs & Fixes
 
@@ -152,6 +196,8 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 | Slow pre-writes (~15s) | 28 individual API calls for tab checks, unmerge, clear | Batched into ~5 calls via `_ensure_all_tabs`, batch `unmergeCells`, `batchClear` |
 | Duplicate student IDs silently overwritten | Same ID in multiple campus sheets | Warning logged; last-write-wins preserved |
 | mergeCells error on re-run | Old merged cells conflict with new layout | `unmergeCells` runs before formatting on all visible sheets |
+| "Invalid requests[0].setDataValidation: This operation is not allowed on cells in typed columns" | Column inside a Google Sheets Table (typed column feature) | `setup_unenroll_columns.py` catches this and skips `setDataValidation` (Table already provides checkbox rendering) |
+| "Range exceeds grid limits. Max rows: X, max columns: 27" | SR tabs only had 27 cols, can't write to col 28 | Script auto-expands grid via `appendDimension` COLUMNS |
 
 ## Known Limitations
 
