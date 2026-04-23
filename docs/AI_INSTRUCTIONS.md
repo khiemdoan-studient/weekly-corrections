@@ -21,6 +21,8 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | `run_export.ps1` | ~70 | One-time: Athena CTAS → S3 → GCS → BQ for alpha_roster |
 | `alpha_roster_ctas.sql` | ~30 | Athena SQL with dedup, handles reserved word "group" |
 | `setup_unenroll_columns.py` | ~150 | One-time: provision Unenroll columns on all 9 ISRs + CMR. Idempotent — safe to re-run |
+| `build_unenroll_queue.py` | ~250 | One-time: create/refresh "Unenroll Queue (Live)" tab on corrections sheet with per-campus QUERY+IMPORTRANGE formulas. Idempotent. |
+| `.github/workflows/hourly-pipeline.yml` | ~40 | GitHub Actions cron: runs `generate_corrections.py` every hour at :00 UTC. Uses `GCP_SA_KEY` secret. |
 
 ## Spreadsheet Architecture
 
@@ -55,6 +57,15 @@ Same title/caption/filter/sort rows. SORT(QUERY()) formula in A7 pulls from hidd
 
 ### Sheet 6: "Rejected Changes" (15 cols: Date + Mismatch Summary + 12 fields + Reason)
 Same as Sheets 3-5 but with extra "Reason for Rejection" column (col O, blank for manual entry). QUERY reads `_RejectedData` A:N (14 cols); Reason is outside QUERY output.
+
+### Real-Time Unenroll Queue (Live) Sheet
+A 7th visible sheet in the corrections spreadsheet that shows IM-flagged students from all 9 campuses in real-time (~1 min latency). Built by `build_unenroll_queue.py`.
+
+- Uses QUERY + IMPORTRANGE for each campus, 50-row block each (stacked vertically per campus)
+- Per-campus Grade column differs: Reading CCSD uses Col8, all others use Col7 (due to Reading's Full Name insertion)
+- WHERE clause uses `Col{N} = TRUE` (direct boolean), NOT `UPPER(Col{N}) = 'TRUE'` which fails with `#VALUE!` on boolean types
+- IMPORTRANGE requires one-time 'Allow access' click by the human user when the tab is first opened
+- Complementary to the hourly Python pipeline: Live Queue shows the flag instantly, Python does full SIS comparison hourly (Sheet 5)
 
 ## ISR (Individual Student Roster) Architecture
 
@@ -98,6 +109,20 @@ The pipeline prints a breakdown to stdout:
 Unenrolling: N (IM-flagged: X, Notes-based: Y)
 ```
 
+## Automation (Hourly Pipeline)
+
+The pipeline runs automatically every hour via GitHub Actions:
+- Workflow: `.github/workflows/hourly-pipeline.yml`
+- Cron: `0 * * * *` (top of each hour, UTC)
+- Trigger: schedule + workflow_dispatch (manual)
+- Secret: `GCP_SA_KEY` contains verbatim `keys/sa-main.json`
+- Concurrency group: single-flight (queue, don't cancel)
+- Runtime: typically 15-20 seconds
+
+Hybrid architecture:
+- Real-time UX: "Unenroll Queue (Live)" sheet updates within ~1 min of IM checkbox change (via IMPORTRANGE)
+- Hourly backstop: full pipeline with SIS comparison runs on schedule, updates Sheet 5 (Roster Unenrollments) and other approval sheets
+
 ## Filtering & Sorting Mechanism
 
 **Dropdowns filter AND sort via SORT(QUERY()) formulas — NOT Apps Script.**
@@ -135,7 +160,7 @@ The formula pattern for Sheet 1 (offset by 2 for accept/reject columns):
 |------|-----------------|-----------|-------|
 | Roster Addition | "Roster Addition" | Enrolled in MAP, student_id not in SIS | Light green (#D4EDDA) |
 | Field Mismatch | "Grade, Email" etc. | Enrolled in both, fields differ | Yellow (#FFF3CD) |
-| Unenrolling | "Unenrolling" | Notes != "Enrolled" in MAP, admissionstatus = "Enrolled" in SIS | Light yellow (#FFFDE7) |
+| Unenrolling | "Unenrolling" | IM-flagged Unenroll=TRUE OR Notes != "Enrolled" in MAP, admissionstatus = "Enrolled" in SIS | Light red (#FEE2E2) |
 
 Colors are applied via conditional formatting rules on the Mismatch Summary column (Sheet 1 only), in priority order: Roster Addition → Unenrolling → NOT_BLANK (field mismatches).
 
@@ -179,6 +204,7 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 5. **Header auto-detection** — Handles schema differences across campus sheets.
 6. **Batched API pre-writes** — Tab existence (1 read + 1 batch create), unmergeCells (1 batched call for all 6 sheets), clear values (`batchClear` for 9 tabs). ~5 pre-write API calls total instead of ~28.
 7. **Three-level unenroll chain** — IM checks SR checkbox → formula mirrors to MR → IMPORTRANGE pushes to CMR → pipeline reads CMR Unenroll via `MAP_HEADER_MAP` auto-detection. No Apps Script needed.
+8. **Hybrid real-time + hourly architecture** — Sheets-only live queue for instant IM feedback (bypass BQ); full pipeline on GitHub Actions hourly schedule for SIS comparison. No pure-Sheets solution exists because Sheets can't query BigQuery.
 
 ## Common Bugs & Fixes
 
@@ -198,6 +224,9 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 | mergeCells error on re-run | Old merged cells conflict with new layout | `unmergeCells` runs before formatting on all visible sheets |
 | "Invalid requests[0].setDataValidation: This operation is not allowed on cells in typed columns" | Column inside a Google Sheets Table (typed column feature) | `setup_unenroll_columns.py` catches this and skips `setDataValidation` (Table already provides checkbox rendering) |
 | "Range exceeds grid limits. Max rows: X, max columns: 27" | SR tabs only had 27 cols, can't write to col 28 | Script auto-expands grid via `appendDimension` COLUMNS |
+| QUERY `WHERE UPPER(col) = 'TRUE'` returns #VALUE! | Boolean values stored as Google Sheets booleans (not strings). UPPER() expects string input. | Use `WHERE col = TRUE` (no UPPER, no quotes) |
+| Pipeline silently misses CMR Unenroll column | Default `A1:AC` range stopped at col 29 (AC). Unenroll is at col AD (29) for 7 campuses. | Expanded to `A1:AE` in `read_map_roster` |
+| Live Queue shows `#REF!` or empty | IMPORTRANGE needs one-time human auth in the destination spreadsheet | User opens the tab and clicks 'Allow access' on the prompt |
 
 ## Known Limitations
 

@@ -40,13 +40,14 @@ text = (
     "Information System) does not match the MAP roster. Implementation Managers review these "
     "mismatches weekly, check off corrections, and the data team submits the changes every Friday.\n"
     "\n"
-    "The spreadsheet has five sheets:\n"
+    "The spreadsheet has seven sheets:\n"
     "\u2022 Corrected Roster Info \u2014 What the data should be (from the MAP roster)\n"
     "\u2022 Current Roster Info in SIS \u2014 What the SIS currently has (for comparison)\n"
     "\u2022 Automated Correction List \u2014 Running history of approved field-mismatch corrections\n"
     "\u2022 Roster Additions \u2014 Running history of approved new student enrollments\n"
     "\u2022 Roster Unenrollments \u2014 Running history of approved student unenrollments\n"
     "\u2022 Rejected Changes \u2014 Running history of rejected corrections with reason column\n"
+    "\u2022 Unenroll Queue (Live) \u2014 Real-time view of IM-flagged Unenroll students (updates within ~1 min)\n"
     "\n"
     "PART 1: HOW TO REVIEW CORRECTIONS\n"
     "\n"
@@ -82,7 +83,7 @@ text = (
     "match the SIS. The Mismatch Summary column is color-coded:\n"
     "\u2022 Green \u2014 Roster Addition (student is enrolled in MAP but not yet in the SIS)\n"
     "\u2022 Yellow \u2014 Field mismatch (student exists in both but specific fields differ)\n"
-    "\u2022 Light yellow \u2014 Unenrolling (student is no longer enrolled in MAP but still enrolled in SIS)\n"
+    "\u2022 Light red \u2014 Unenrolling (student is no longer enrolled in MAP but still enrolled in SIS)\n"
     "What you do: Review the data. Check Accept Changes (column A, green) to approve, or "
     "Reject Changes (column B, red) to reject. Your choice is automatically routed to the correct sheet.\n"
     "\n"
@@ -155,7 +156,8 @@ text = (
     "\u2022 Find the student\u2019s row on the \u201cStudent Roster\u201d tab.\n"
     "\u2022 Check the \u201cUnenroll\u201d checkbox in the last column.\n"
     "\u2022 Within a minute, the checkmark propagates through your MAP Roster tab into the main MAP roster sheet.\n"
-    "\u2022 The next time the weekly correction pipeline runs, the student will appear in the \u201cRoster Unenrollments\u201d sheet for the data team to process.\n"
+    "\u2022 Within about an hour (the pipeline runs automatically every hour on GitHub Actions), the student will appear in the \u201cRoster Unenrollments\u201d sheet for the data team to process.\n"
+    "\u2022 You can see your check take effect immediately in the \u201cUnenroll Queue (Live)\u201d tab of the corrections sheet (updates within ~1 minute)\n"
     "\n"
     "Important rules\n"
     "\u2022 Leave the checkbox CHECKED after unenrollment \u2014 it\u2019s a permanent historical record.\n"
@@ -214,6 +216,10 @@ text = (
     "(2) Make sure the SIS still has the student as Enrolled \u2014 if it already matches, no correction "
     "is needed. (3) The pipeline only checks on runs \u2014 ask Khiem to run `python generate_corrections.py` "
     "or wait for the next scheduled run.\n"
+    "\n"
+    "\u201cUnenroll Queue (Live) shows #REF! or is empty\u201d\n"
+    "This is a one-time authorization prompt from IMPORTRANGE. When you first open the tab, click "
+    "\u201cAllow access\u201d on the pop-up. After that, data will populate within seconds and stay live going forward.\n"
 )
 
 requests.append({"insertText": {"location": {"index": 1}, "text": text}})
@@ -342,6 +348,7 @@ for issue in [
     "\u201cMy approved correction isn\u2019t in the right sheet\u201d",
     "\u201cI see a student in Sheet 1 but not Sheet 2\u201d",
     "\u201cMy Unenroll checkbox isn\u2019t showing in the corrections list\u201d",
+    "\u201cUnenroll Queue (Live) shows #REF! or is empty\u201d",
 ]:
     i = text.find(issue)
     if i >= 0:

@@ -41,7 +41,7 @@ NAVY_MED = _rgb("263D66")
 GREY_LABEL = _rgb("94A3B8")
 WHITE = _rgb("FFFFFF")
 FILTER_BG = _rgb("1E3A5F")
-YELLOW_LIGHT = _rgb("FFFDE7")
+RED_LIGHT = _rgb("FEE2E2")  # light red for Unenrolling
 
 
 def ensure_tab(sheets, spreadsheet_id, tab_name):
@@ -361,7 +361,7 @@ def main():
                     "startColumnIndex": 0,
                     "endColumnIndex": NC,
                 },
-                "cell": {"userEnteredFormat": {"backgroundColor": YELLOW_LIGHT}},
+                "cell": {"userEnteredFormat": {"backgroundColor": RED_LIGHT}},
                 "fields": "userEnteredFormat.backgroundColor",
             }
         },

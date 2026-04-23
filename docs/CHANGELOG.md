@@ -1,5 +1,31 @@
 # Changelog
 
+## [v2.4.1] — 2026-04-22
+
+### Changed
+- **Unenrolling conditional formatting color** — Changed from light yellow (#FFFDE7) to light red (#FEE2E2) on Sheet 1's Mismatch Summary column. Matches the Reject checkbox column background color for visual consistency (red = "needs removal"). New constant `RED_LIGHT` added alongside existing `YELLOW_LIGHT` (now marked legacy). Also applied to the Unenroll Queue (Live) sheet data area background.
+- **Docs updated**: `HUMAN_INSTRUCTIONS.md`, `AI_INSTRUCTIONS.md`, and the User Guide Google Doc all reflect the new color.
+
+### Verified
+- **First GitHub Actions run succeeded** — manual workflow_dispatch trigger completed in 37s, wrote 198 correction rows (192 existing + 6 IM-flagged Unenrolling from Hardeeville Elementary).
+
+## [v2.4.0] — 2026-04-22
+
+### Added
+- **"Unenroll Queue (Live)" visible sheet** — new tab in the corrections spreadsheet (sheetId 1118002361) that shows IM-flagged Unenroll students across all 9 campuses in real-time (~1 min latency via IMPORTRANGE refresh). Each campus gets its own 50-row block with `QUERY(IMPORTRANGE(...), "SELECT ... WHERE Col{N} = TRUE")` formula that auto-expands as IMs check boxes. Does NOT include SIS comparison (the hourly Python pipeline handles that).
+- **`build_unenroll_queue.py`** (new) — One-time idempotent setup script. Creates the tab, writes formulas, applies formatting (navy title, italic caption, yellow data bg).
+- **Hourly GitHub Actions workflow** (`.github/workflows/hourly-pipeline.yml`) — Runs `generate_corrections.py` every hour at :00 UTC on ubuntu-latest. Loads `GCP_SA_KEY` from repo secret, writes to `keys/sa-main.json`, runs pipeline, cleans up credentials. Features: `workflow_dispatch` for manual runs, `concurrency` group for single-flight, 10-min timeout.
+
+### Fixed
+- **Boolean WHERE clause in QUERY** — `WHERE UPPER(Col{N}) = 'TRUE'` returned `#VALUE!` because UPPER can't apply to boolean. Fixed to `WHERE Col{N} = TRUE` (unquoted, direct boolean compare).
+- **Reading CCSD grade column offset** — Because Reading CCSD has an extra "Full Name" column at position G, its Grade is at col H (Col8) not Col7. `build_campus_formula` checks the tab name and uses the right column.
+- **`read_map_roster` read range expanded** from `A1:AC` to `A1:AE` so the pipeline actually picks up the Unenroll column at col AD (29) for 7 of 9 campuses. Previously the code silently missed 6 IM-flagged Hardeeville Elementary unenrollments.
+
+### Operations
+- **GCP_SA_KEY GitHub secret** (already installed) — contains verbatim `keys/sa-main.json`. Used only by the workflow; never committed.
+- **One-time user action required**: Open "Unenroll Queue (Live)" tab in the corrections sheet and click 'Allow access' on the IMPORTRANGE prompt. After that, real-time updates work automatically.
+- **Repo**: https://github.com/khiemdoan-studient/weekly-corrections
+
 ## [v2.3.0] — 2026-04-22
 
 ### Added

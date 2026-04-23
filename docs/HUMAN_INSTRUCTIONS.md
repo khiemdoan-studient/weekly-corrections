@@ -23,13 +23,19 @@ python generate_corrections.py
 
 Expected output shows enrolled counts per campus, mismatch counts by type, and a link to the output sheet.
 
+### Automation
+
+The pipeline now runs **automatically every hour** via GitHub Actions — you don't need to ask anyone to kick it off. You can see the run history (and any failures) here: https://github.com/khiemdoan-studient/weekly-corrections/actions
+
+Manual runs via `python generate_corrections.py` still work if you ever need one off-cycle, but they aren't necessary for the normal weekly review.
+
 ## How to Review Corrections
 
 1. Open the [Automated Weekly Corrections](https://docs.google.com/spreadsheets/d/12dqu58KKdsZN9nLre9Fntkk7vSILu3KfcW4WDvo5-Ls) spreadsheet
 2. **Sheet 1 ("Corrected Roster Info")** shows MAP roster data for mismatched students, with color-coded Mismatch Summary:
    - **Green** — Roster Addition (student in MAP but not in SIS)
    - **Yellow** — Field mismatch (student in both, specific fields differ)
-   - **Light yellow** — Unenrolling (student no longer enrolled in MAP but still in SIS)
+   - **Light red** — Unenrolling (student no longer enrolled in MAP but still in SIS)
 3. **Sheet 2 ("Current Roster Info in SIS")** shows the same students' SIS data
 4. Compare side by side — the Mismatch Summary column (last column in Sheet 1) tells you exactly which fields differ
 5. **Accept or Reject** each correction:
@@ -99,6 +105,20 @@ The accept/reject workflow requires a one-time Apps Script setup:
 | 4 | Roster Additions | Running history of approved new student enrollments |
 | 5 | Roster Unenrollments | Running history of approved student unenrollments |
 | 6 | Rejected Changes | Running history of rejected corrections with reason column |
+| 7 | Unenroll Queue (Live) | Real-time view of IM-flagged Unenroll students across all 9 campuses. Updates within ~1 minute of checking a box. |
+
+## How the Live Queue Updates vs the Full Pipeline
+
+There are two different things that update when you flag a student for Unenroll, and they happen on different timelines:
+
+- **Live Queue** (the "Unenroll Queue (Live)" tab) shows IM-flagged students IMMEDIATELY, but doesn't check the SIS — it's a visibility tool so you and other IMs can see who's been flagged at a glance.
+- **Full pipeline** (which updates the "Roster Unenrollments" sheet and others) runs AUTOMATICALLY every hour via GitHub Actions.
+
+So if you flag a student for Unenroll:
+- **Within ~1 min:** they appear on "Unenroll Queue (Live)"
+- **Within 1 hour:** the full pipeline picks them up, compares to SIS, and adds them to "Roster Unenrollments" for the data team
+
+You no longer need to ask someone to run `python generate_corrections.py` — it runs automatically.
 
 ## Dropdown Filters
 
@@ -123,3 +143,5 @@ Each sheet has 5 filter dropdowns (Campus, Grade, Level, Student Group, Guide Em
 | Checkboxes disappeared after changing a filter | Expected behavior — checkboxes reset when filters change because the visible rows shift |
 | I don't see my campus in the dropdown | Your campus may not have any mismatched students this week |
 | My Unenroll checkbox isn't showing up in the correction list | (1) Has IMPORTRANGE refreshed? It can take up to a minute. (2) Is SIS actually still showing Enrolled for that student? If SIS already matches MAP, nothing to flag. (3) Has the Python pipeline run since you checked the box? |
+| Unenroll Queue (Live) shows #REF! or is empty | This is a one-time auth prompt from IMPORTRANGE. Click 'Allow access' when you see the pop-up in the sheet — the data will populate within seconds. |
+| Hourly pipeline hasn't run when expected | Check https://github.com/khiemdoan-studient/weekly-corrections/actions for any failed runs. Click 'Re-run all jobs' on a failed workflow or ask Khiem. |

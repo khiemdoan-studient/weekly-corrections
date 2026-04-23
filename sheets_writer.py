@@ -57,7 +57,8 @@ DROPDOWN_BG = _rgb("2D4A7A")  # lighter blue for dropdown row (row 5)
 RED_HDR = _rgb("7F1D1D")  # dark red for Mismatch Summary header
 GREEN_LIGHT = _rgb("D4EDDA")  # light green for Roster Addition
 YELLOW_MM = _rgb("FFF3CD")  # yellow for field mismatches
-YELLOW_LIGHT = _rgb("FFFDE7")  # light yellow for Unenrolling
+YELLOW_LIGHT = _rgb("FFFDE7")  # light yellow (legacy — no longer used)
+RED_LIGHT = _rgb("FEE2E2")  # light red for Unenrolling
 ACCEPT_BG = _rgb("D4EDDA")  # light green for Accept Changes column
 REJECT_BG = _rgb("FEE2E2")  # light red for Reject Changes column
 
@@ -1546,7 +1547,7 @@ def _format_visible_sheet(
                 }
             }
         )
-        # Rule 1: "Unenrolling" → light yellow
+        # Rule 1: "Unenrolling" → light red
         fmt.append(
             {
                 "addConditionalFormatRule": {
@@ -1557,7 +1558,7 @@ def _format_visible_sheet(
                                 "type": "TEXT_CONTAINS",
                                 "values": [{"userEnteredValue": "Unenrolling"}],
                             },
-                            "format": {"backgroundColor": YELLOW_LIGHT},
+                            "format": {"backgroundColor": RED_LIGHT},
                         },
                     },
                     "index": 1,
