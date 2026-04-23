@@ -220,6 +220,11 @@ text = (
     "\u201cUnenroll Queue (Live) shows #REF! or is empty\u201d\n"
     "This is a one-time authorization prompt from IMPORTRANGE. When you first open the tab, click "
     "\u201cAllow access\u201d on the pop-up. After that, data will populate within seconds and stay live going forward.\n"
+    "\n"
+    "\u201cThe Date Approved column has mixed date formats\u201d\n"
+    "This was a rare timing bug in the Apps Script that has been fixed. If you still see mixed formats, "
+    "ask Khiem to run the one-time date normalization script. Going forward, all approval dates should "
+    "be in 2026-04-23 01:37:44 format.\n"
 )
 
 requests.append({"insertText": {"location": {"index": 1}, "text": text}})
@@ -349,6 +354,7 @@ for issue in [
     "\u201cI see a student in Sheet 1 but not Sheet 2\u201d",
     "\u201cMy Unenroll checkbox isn\u2019t showing in the corrections list\u201d",
     "\u201cUnenroll Queue (Live) shows #REF! or is empty\u201d",
+    "\u201cThe Date Approved column has mixed date formats\u201d",
 ]:
     i = text.find(issue)
     if i >= 0:

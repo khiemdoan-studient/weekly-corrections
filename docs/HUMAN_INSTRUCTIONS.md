@@ -95,6 +95,14 @@ The accept/reject workflow requires a one-time Apps Script setup:
 
 **Important:** After any code update (e.g., new version with accept/reject columns), repeat steps 2-5 to paste the latest `Code.gs`.
 
+**v2.4.2 update (race-condition fix)**: If you're upgrading from an earlier
+version, you need to re-paste `apps_script/Code.gs` once more. Older versions
+had a rare but real race where clicking multiple Accept/Reject checkboxes
+within a second could leave some rows with an inconsistent date format
+(like `4/23/2026 1:37:44` instead of `2026-04-23 01:37:44`), breaking the
+"Date Approved" chronological sort. The fix pre-formats the timestamp before
+writing the row, eliminating the race.
+
 ## Spreadsheet Sheets
 
 | # | Sheet Name | Purpose |
@@ -145,3 +153,4 @@ Each sheet has 5 filter dropdowns (Campus, Grade, Level, Student Group, Guide Em
 | My Unenroll checkbox isn't showing up in the correction list | (1) Has IMPORTRANGE refreshed? It can take up to a minute. (2) Is SIS actually still showing Enrolled for that student? If SIS already matches MAP, nothing to flag. (3) Has the Python pipeline run since you checked the box? |
 | Unenroll Queue (Live) shows #REF! or is empty | This is a one-time auth prompt from IMPORTRANGE. Click 'Allow access' when you see the pop-up in the sheet — the data will populate within seconds. |
 | Hourly pipeline hasn't run when expected | Check https://github.com/khiemdoan-studient/weekly-corrections/actions for any failed runs. Click 'Re-run all jobs' on a failed workflow or ask Khiem. |
+| Date column in approval sheets has mixed formats (`4/23/2026` mixed with `2026-04-23`) | Older Code.gs race condition. Run `python normalize_dates.py` once to fix historical rows, then re-paste the current `apps_script/Code.gs` to prevent future drift. |

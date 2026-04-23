@@ -1,5 +1,40 @@
 # Changelog
 
+## [v2.4.2] — 2026-04-22
+
+### Fixed
+- **Inconsistent date formats in cumulative tabs** — The old Code.gs pattern
+  `appendRow([new Date(), ...])` + `setNumberFormat(getLastRow(), 1, "yyyy-MM-dd HH:mm:ss")`
+  had a race: when multiple onEdit triggers fired nearly simultaneously (e.g. user
+  checking 3 checkboxes in quick succession), `getLastRow()` returned different
+  values across the concurrent triggers, so `setNumberFormat` sometimes applied
+  to the wrong row. Result: some rows displayed as `4/23/2026 1:37:44` (locale
+  default) while others got the intended `2026-04-23 01:37:44`, breaking the
+  chronological sort on Automated Correction List / Roster Additions / Roster
+  Unenrollments / Rejected Changes.
+
+- **`apps_script/Code.gs` hardened** — Pre-formats the timestamp to an ISO
+  string via `Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss")`
+  BEFORE `appendRow`. The row is now appended with the already-formatted string,
+  eliminating the post-append `setNumberFormat` call and removing the race.
+
+### Added
+- **`normalize_dates.py`** — One-time migration that walks each cumulative tab,
+  parses column A regardless of current format (handles both `M/D/YYYY H:MM:SS`
+  and `YYYY-MM-DD HH:MM:SS`), rewrites as canonical `yyyy-MM-dd HH:mm:ss` ISO
+  string, and applies TEXT number format to the column for display consistency.
+  Idempotent — safe to re-run.
+
+### Verified
+- Post-normalization sort on Automated Correction List: `2026-04-23 01:37:47` →
+  `2026-04-23 01:37:44` → `2026-04-17 10:54:27` → ... → `2026-04-14 12:02:37`.
+  Perfectly chronological.
+
+### User Action Required
+- Re-paste the updated `apps_script/Code.gs` into Extensions > Apps Script to
+  pick up the race-safe timestamp handling. (Existing rows already normalized
+  by the one-time script above.)
+
 ## [v2.4.1] — 2026-04-22
 
 ### Changed

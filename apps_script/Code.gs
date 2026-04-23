@@ -64,6 +64,14 @@ function onEdit(e) {
     // Read Mismatch Summary (col O = column 15) — used by both accept and reject
     var mismatchSummary = sheet.getRange(row, 15).getValue();
 
+    // Pre-format the timestamp as an ISO string BEFORE appendRow. This
+    // eliminates a race condition where concurrent onEdit triggers would
+    // call setNumberFormat(getLastRow()) against each other's newly-
+    // appended row, leaving some rows in locale-default format
+    // (e.g. "4/23/2026 1:37:44") while others got ISO format.
+    var tz = Session.getScriptTimeZone();
+    var dateString = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss");
+
     if (col === 1) {
       // ── ACCEPT: route by mismatch type ──────────────────────────
       var targetTabName;
@@ -81,11 +89,7 @@ function onEdit(e) {
         targetSheet.hideSheet();
       }
 
-      var approvalDate = new Date();
-      targetSheet.appendRow([approvalDate, mismatchSummary].concat(data));
-
-      var lastRow = targetSheet.getLastRow();
-      targetSheet.getRange(lastRow, 1).setNumberFormat("yyyy-MM-dd HH:mm:ss");
+      targetSheet.appendRow([dateString, mismatchSummary].concat(data));
 
     } else {
       // ── REJECT: all rejections go to _RejectedData ──────────────
@@ -95,11 +99,7 @@ function onEdit(e) {
         targetSheet.hideSheet();
       }
 
-      var rejectionDate = new Date();
-      targetSheet.appendRow([rejectionDate, mismatchSummary].concat(data));
-
-      var lastRow = targetSheet.getLastRow();
-      targetSheet.getRange(lastRow, 1).setNumberFormat("yyyy-MM-dd HH:mm:ss");
+      targetSheet.appendRow([dateString, mismatchSummary].concat(data));
     }
 
     // Grey out the row on Sheet 1
