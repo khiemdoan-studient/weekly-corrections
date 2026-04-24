@@ -1,5 +1,36 @@
 # Changelog
 
+## [v2.5.0] — 2026-04-24
+
+### Added
+- **Weekly snapshot automation** — Every Monday at 07:00 ET (11:00 UTC), GitHub Actions runs `generate_weekly_snapshot.py` and produces a single Google Sheet bundling all corrections not yet sent to support. One sheet per week, lives in a Shared Drive, same URL survives re-runs so existing shares don't break.
+- **`generate_weekly_snapshot.py`** (~500 lines) — orchestrator. Computes current Monday in `America/New_York`, finds-or-creates a sheet named `M/D Corrections` (e.g. `4/20 Corrections`) at the root of the Shared Drive `Weekly Corrections Archive` (id `0AFQGIqcKjsyFUk9PVA`), then for each of 3 cumulative source tabs (`_ApprovedData`, `_AdditionsData`, `_UnenrollData`) reads rows where col O "Sent Week" is blank OR equals the current Monday ISO date, writes them into 3 tabs in the weekly sheet (`Correction List`, `Roster Additions`, `Roster Unenrollments`), hides tabs with 0 data rows, deletes the default `Sheet1`, then stamps col O of every selected source row with the current Monday ISO so next week's run excludes them automatically. `_RejectedData` is deliberately excluded — rejected rows don't go to support.
+- **`add_sent_week_column.py`** (~100 lines) — one-time pre-flight that ensures col O header is `Sent Week` across all cumulative tabs. Safe to re-run; idempotent.
+- **`.github/workflows/weekly-snapshot.yml`** — cron `0 11 * * 1` + `workflow_dispatch`.
+- **`config.py` constants** — `WEEKLY_SHARED_DRIVE_ID = "0AFQGIqcKjsyFUk9PVA"`, `WEEKLY_SHARED_DRIVE_NAME`, `WEEKLY_TIMEZONE = "America/New_York"`, `SENT_WEEK_COL = 14`, `SENT_WEEK_HEADER = "Sent Week"`, `WEEKLY_TAB_CORRECTIONS/ADDITIONS/UNENROLLMENTS`, `WEEKLY_SOURCE_TABS` dict, `WEEKLY_HEADERS` (14-col header list matching the approval sheets).
+- **`requirements.txt`** — added `tzdata` (required for `zoneinfo` on Windows runners).
+
+### Changed
+- **Re-run semantics are idempotent** — re-running the same week updates the existing sheet in place (same file id, existing shares survive). Bandings are cleared before re-apply so `addBanding` doesn't fail with "already banded".
+
+### Architecture note — why a Shared Drive
+Service accounts have 0 bytes of Drive storage quota by default, so the SA cannot own spreadsheet files. Solution: a Google Shared Drive ("Weekly Corrections Archive") with the SA added as Content Manager. Files created in a Shared Drive are owned by the drive itself, bypassing user quotas. All Drive API calls now pass `supportsAllDrives=True` and `files.list` uses `driveId` + `corpora='drive'` + `includeItemsFromAllDrives=True`.
+
+### Fixed (caught during build)
+- **Windows cp1252 console couldn't encode `→` and `─`** — replaced with ASCII `->` and `-` in print statements. (Em-dash `—` encodes fine in cp1252 and stays.)
+- **`addBanding` errors on re-run when bandings already existed** — now deletes existing bandings first within the same batchUpdate.
+
+### Verified
+- First live run: created `4/20 Corrections` (id `1TmpjJkFrKQdG_DzxkVrE0YqIb30tdK5ZZTWXNguXA0I`) in the Shared Drive.
+- Read 23 rows from `_ApprovedData`, 0 from `_AdditionsData`, 6 from `_UnenrollData` — 29 total selected for the week of 4/20.
+- Weekly sheet tabs: `Correction List` visible (24 rows incl. header), `Roster Additions` hidden (empty), `Roster Unenrollments` visible (7 rows incl. header). `Sheet1` deleted.
+- All 29 source rows stamped `2026-04-20` in col O.
+- Idempotent re-run: same file updated in place, log line `stamped 0 rows` confirms no double-marking.
+
+### User Action Required
+- **None for the automation itself.** Next Monday 07:00 ET, the snapshot auto-generates.
+- **To send to support**: open the current week's sheet in the Shared Drive "Weekly Corrections Archive", click Share, send to your support contact. The URL stays stable for the whole week even if the script re-runs, so shares don't break.
+
 ## [v2.4.5] — 2026-04-23
 
 ### Fixed

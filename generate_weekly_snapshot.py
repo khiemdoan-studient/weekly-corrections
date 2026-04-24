@@ -1,0 +1,511 @@
+"""generate_weekly_snapshot.py — Create/update a weekly Google Sheet that
+bundles all corrections not yet sent to support.
+
+Runs every Monday at 07:00 ET via GitHub Actions, and can be re-run manually
+any day. When re-run in the same week, it updates the existing weekly file
+in place (same file ID — any existing shares with support remain valid).
+
+Behavior
+--------
+1. Compute current Monday in America/New_York.
+2. Find-or-create "M/D Corrections" spreadsheet inside the
+   WEEKLY_SHARED_DRIVE_ID Shared Drive. Files in a Shared Drive are owned
+   by the drive itself, so no per-user quota applies and anyone with drive
+   membership automatically has access — no per-file sharing needed.
+3. For each of the 3 source cumulative tabs (_ApprovedData, _AdditionsData,
+   _UnenrollData), read rows where col O (Sent Week) is blank OR equals
+   the current Monday ISO date.
+4. Write those rows into the weekly sheet under tabs:
+       Correction List        ← _ApprovedData
+       Roster Additions       ← _AdditionsData
+       Roster Unenrollments   ← _UnenrollData
+   Hide any tab that has 0 data rows. Delete the default "Sheet1" tab
+   created with the spreadsheet.
+5. Stamp col O of the selected rows in the cumulative tabs with the
+   current Monday ISO (e.g. "2026-04-20"), so next week's run excludes
+   them automatically.
+
+Design notes
+------------
+- Uses a Shared Drive (not a user's personal Drive) because the service
+  account has 0 bytes of storage quota and cannot own regular Drive files.
+  The SA is added as Content Manager to the Shared Drive; files created
+  there are owned by the drive itself.
+- _RejectedData is NOT included (rejected rows don't go to support).
+- Cumulative tabs have no header row — col O simply holds data per row
+  ("" = unsent, "YYYY-MM-DD" = sent in that week).
+- Re-running the same week picks up both already-sent rows (Sent Week ==
+  current Monday) AND newly-accepted unsent rows, so the snapshot always
+  reflects the full week up to now.
+
+Usage
+-----
+    python generate_weekly_snapshot.py
+"""
+
+import re
+import sys
+import time
+from datetime import datetime, timedelta, date
+from zoneinfo import ZoneInfo
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+from config import (
+    SERVICE_ACCOUNT_KEY,
+    SCOPES,
+    OUTPUT_SPREADSHEET_ID,
+    WEEKLY_SHARED_DRIVE_ID,
+    WEEKLY_SHARED_DRIVE_NAME,
+    WEEKLY_TIMEZONE,
+    SENT_WEEK_COL,
+    WEEKLY_SOURCE_TABS,
+    WEEKLY_HEADERS,
+)
+
+ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+SHEET_MIME = "application/vnd.google-apps.spreadsheet"
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+
+def _col_letter(idx):
+    """0-based column index → A1 letter. Handles up to ZZ."""
+    if idx < 26:
+        return chr(ord("A") + idx)
+    return chr(ord("A") + idx // 26 - 1) + chr(ord("A") + idx % 26)
+
+
+def compute_monday(tz_name):
+    """Return (date, 'M/D', 'YYYY-MM-DD') for Monday of the current week in tz."""
+    now = datetime.now(ZoneInfo(tz_name))
+    monday = (now - timedelta(days=now.weekday())).date()
+    return monday, f"{monday.month}/{monday.day}", monday.isoformat()
+
+
+def _retry(fn, attempts=3, delay=5):
+    for i in range(attempts):
+        try:
+            return fn()
+        except HttpError as e:
+            if i == attempts - 1:
+                raise
+            print(f"    [retry] HttpError {e.resp.status}: {e}  — sleeping {delay}s")
+            time.sleep(delay * (i + 1))
+
+
+# ── Drive operations (Shared Drive mode) ───────────────────────────────────
+# All Drive API calls need supportsAllDrives=True and files.list additionally
+# needs driveId + corpora='drive' + includeItemsFromAllDrives=True to
+# scope to our Shared Drive.
+
+
+def find_sheet_in_shared_drive(drive, shared_drive_id, name):
+    """Return spreadsheet ID if a sheet with this name exists in the drive, else None."""
+    safe_name = name.replace("'", "\\'")
+    q = f"name='{safe_name}' and mimeType='{SHEET_MIME}' and trashed=false"
+    resp = _retry(
+        lambda: drive.files()
+        .list(
+            q=q,
+            driveId=shared_drive_id,
+            corpora="drive",
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
+            fields="files(id,name)",
+        )
+        .execute()
+    )
+    files = resp.get("files", [])
+    return files[0]["id"] if files else None
+
+
+def create_sheet_in_shared_drive(drive, shared_drive_id, name):
+    """Create a new Google Sheets file at the root of the Shared Drive."""
+    result = _retry(
+        lambda: drive.files()
+        .create(
+            body={
+                "name": name,
+                "mimeType": SHEET_MIME,
+                "parents": [shared_drive_id],  # Shared Drive ID acts as parent
+            },
+            supportsAllDrives=True,
+            fields="id",
+        )
+        .execute()
+    )
+    return result["id"]
+
+
+# ── Sheets operations ──────────────────────────────────────────────────────
+
+
+def get_sheet_tabs(sheets, spreadsheet_id):
+    """Return dict of tab_name → sheetId."""
+    resp = _retry(
+        lambda: sheets.spreadsheets()
+        .get(spreadsheetId=spreadsheet_id, fields="sheets.properties")
+        .execute()
+    )
+    return {
+        s["properties"]["title"]: s["properties"]["sheetId"]
+        for s in resp.get("sheets", [])
+    }
+
+
+def ensure_tab(sheets, spreadsheet_id, name, existing_tabs):
+    """Ensure a tab with this name exists. Returns sheetId. Updates existing_tabs in place."""
+    if name in existing_tabs:
+        return existing_tabs[name]
+    result = _retry(
+        lambda: sheets.spreadsheets()
+        .batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": name}}}]},
+        )
+        .execute()
+    )
+    new_id = result["replies"][0]["addSheet"]["properties"]["sheetId"]
+    existing_tabs[name] = new_id
+    return new_id
+
+
+def read_cumulative_tab(sheets, spreadsheet_id, tab_name, sent_week_col):
+    """Read all rows from a cumulative tab.
+
+    Returns list of (row_index_1based, row_values_padded_to_15_cols).
+    """
+    col_letter = _col_letter(sent_week_col)
+    resp = (
+        sheets.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab_name}'!A:{col_letter}",
+            valueRenderOption="UNFORMATTED_VALUE",
+            dateTimeRenderOption="FORMATTED_STRING",
+        )
+        .execute()
+    )
+    rows = resp.get("values", [])
+    result = []
+    for i, row in enumerate(rows):
+        padded = list(row) + [""] * (sent_week_col + 1 - len(row))
+        result.append((i + 1, padded))  # 1-based row
+    return result
+
+
+def filter_for_week(rows, current_monday_iso, sent_week_col):
+    """Return subset of rows whose Sent Week (col O) is blank OR == current_monday_iso."""
+    selected = []
+    for row_num, row in rows:
+        sent = str(row[sent_week_col] or "").strip()
+        if not sent or sent == current_monday_iso:
+            # Also skip truly empty rows (no Date, no Campus)
+            if str(row[0] or "").strip() or str(row[2] or "").strip():
+                selected.append((row_num, row))
+    return selected
+
+
+# ── Formatting ─────────────────────────────────────────────────────────────
+
+
+def _rgb(h):
+    h = h.lstrip("#")
+    return {
+        "red": int(h[0:2], 16) / 255,
+        "green": int(h[2:4], 16) / 255,
+        "blue": int(h[4:6], 16) / 255,
+    }
+
+
+NAVY_DARK = _rgb("0F1B33")
+WHITE = _rgb("FFFFFF")
+ALT_ROW = _rgb("EDF2F7")
+
+
+def build_tab_format_requests(sheet_id, num_cols, num_data_rows):
+    """Header bold + freeze + banding + column widths for a weekly tab."""
+    requests = [
+        # Header row: navy bg, white bold 10pt
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 0,
+                    "endRowIndex": 1,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": num_cols,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": NAVY_DARK,
+                        "textFormat": {
+                            "foregroundColor": WHITE,
+                            "bold": True,
+                            "fontSize": 10,
+                        },
+                        "horizontalAlignment": "CENTER",
+                        "verticalAlignment": "MIDDLE",
+                    }
+                },
+                "fields": "userEnteredFormat",
+            }
+        },
+        # Freeze header
+        {
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": sheet_id,
+                    "gridProperties": {"frozenRowCount": 1},
+                },
+                "fields": "gridProperties.frozenRowCount",
+            }
+        },
+    ]
+    # Banding — but only if there's data
+    if num_data_rows > 0:
+        end_row = max(1 + num_data_rows, 2)
+        requests.append(
+            {
+                "addBanding": {
+                    "bandedRange": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 0,
+                            "endRowIndex": end_row,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": num_cols,
+                        },
+                        "rowProperties": {
+                            "headerColor": NAVY_DARK,
+                            "firstBandColor": _rgb("FFFFFF"),
+                            "secondBandColor": ALT_ROW,
+                        },
+                    }
+                }
+            }
+        )
+
+    # Column widths — Date, Mismatch, then 12 fields
+    widths = [130, 180, 150, 60, 80, 110, 110, 220, 150, 110, 110, 220, 110, 130]
+    for i, w in enumerate(widths[:num_cols]):
+        requests.append(
+            {
+                "updateDimensionProperties": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "COLUMNS",
+                        "startIndex": i,
+                        "endIndex": i + 1,
+                    },
+                    "properties": {"pixelSize": w},
+                    "fields": "pixelSize",
+                }
+            }
+        )
+    return requests
+
+
+# ── Main ───────────────────────────────────────────────────────────────────
+
+
+def main():
+    start = time.time()
+    print("=" * 70)
+    print("  WEEKLY SNAPSHOT — corrections bundle for support")
+    print("=" * 70)
+
+    monday_date, monday_label, monday_iso = compute_monday(WEEKLY_TIMEZONE)
+    sheet_name = f"{monday_label} Corrections"
+    print(f"  Current Monday ({WEEKLY_TIMEZONE}): {monday_iso}")
+    print(f"  Target sheet name: '{sheet_name}'")
+
+    creds = service_account.Credentials.from_service_account_file(
+        SERVICE_ACCOUNT_KEY, scopes=SCOPES
+    )
+    drive = build("drive", "v3", credentials=creds)
+    sheets = build("sheets", "v4", credentials=creds)
+
+    # ── Verify Shared Drive access ───────────────────────────────────
+    print(
+        f"\n  Target Shared Drive: '{WEEKLY_SHARED_DRIVE_NAME}' "
+        f"id={WEEKLY_SHARED_DRIVE_ID}"
+    )
+
+    # ── Find or create the weekly sheet inside the Shared Drive ──────
+    ssid = find_sheet_in_shared_drive(drive, WEEKLY_SHARED_DRIVE_ID, sheet_name)
+    created_new = False
+    if ssid is None:
+        ssid = create_sheet_in_shared_drive(drive, WEEKLY_SHARED_DRIVE_ID, sheet_name)
+        created_new = True
+        print(f"  Sheet created id={ssid} (new)")
+    else:
+        print(f"  Sheet found id={ssid} (updating in place)")
+
+    # ── Read cumulative tabs, collect rows for this week ─────────────
+    print("\n  Reading cumulative tabs...")
+    collected = {}  # weekly_tab_name → list of (orig_row_num, row_values)
+    total_rows = 0
+    for weekly_tab, source_tab in WEEKLY_SOURCE_TABS.items():
+        rows = read_cumulative_tab(
+            sheets, OUTPUT_SPREADSHEET_ID, source_tab, SENT_WEEK_COL
+        )
+        filtered = filter_for_week(rows, monday_iso, SENT_WEEK_COL)
+        collected[weekly_tab] = filtered
+        print(
+            f"    {source_tab} -> {weekly_tab}: "
+            f"{len(rows)} total, {len(filtered)} selected for this week"
+        )
+        total_rows += len(filtered)
+
+    # ── Write the weekly sheet ───────────────────────────────────────
+    print(f"\n  Writing weekly sheet (total {total_rows} rows)...")
+    existing_tabs = get_sheet_tabs(sheets, ssid)
+
+    # Make sure each of our 3 tabs exists
+    for tab_name in WEEKLY_SOURCE_TABS.keys():
+        ensure_tab(sheets, ssid, tab_name, existing_tabs)
+
+    # Clear each weekly tab, then write header + data
+    value_payloads = []
+    visibility_requests = []
+    for weekly_tab in WEEKLY_SOURCE_TABS.keys():
+        rows_for_tab = collected[weekly_tab]
+        data_rows = [row[:SENT_WEEK_COL] for _, row in rows_for_tab]  # drop col O
+        payload = [WEEKLY_HEADERS] + data_rows
+        value_payloads.append({"range": f"'{weekly_tab}'!A1", "values": payload})
+        # Hide tab if no data rows
+        hidden = len(data_rows) == 0
+        visibility_requests.append(
+            {
+                "updateSheetProperties": {
+                    "properties": {
+                        "sheetId": existing_tabs[weekly_tab],
+                        "hidden": hidden,
+                    },
+                    "fields": "hidden",
+                }
+            }
+        )
+
+    # Clear old data
+    _retry(
+        lambda: sheets.spreadsheets()
+        .values()
+        .batchClear(
+            spreadsheetId=ssid,
+            body={"ranges": [f"'{t}'!A:Z" for t in WEEKLY_SOURCE_TABS.keys()]},
+        )
+        .execute()
+    )
+
+    # Write new data
+    _retry(
+        lambda: sheets.spreadsheets()
+        .values()
+        .batchUpdate(
+            spreadsheetId=ssid,
+            body={"valueInputOption": "RAW", "data": value_payloads},
+        )
+        .execute()
+    )
+
+    # Format each tab. First delete any existing bandings on our target tabs
+    # so addBanding (not idempotent — errors if range already banded) re-runs
+    # cleanly.
+    target_sheet_ids = {existing_tabs[t] for t in WEEKLY_SOURCE_TABS.keys()}
+    bandings_resp = _retry(
+        lambda: sheets.spreadsheets()
+        .get(
+            spreadsheetId=ssid,
+            fields="sheets(properties.sheetId,bandedRanges)",
+        )
+        .execute()
+    )
+    format_requests = []
+    for sheet in bandings_resp.get("sheets", []):
+        sid_here = sheet["properties"]["sheetId"]
+        if sid_here not in target_sheet_ids:
+            continue
+        for br in sheet.get("bandedRanges", []):
+            format_requests.append(
+                {"deleteBanding": {"bandedRangeId": br["bandedRangeId"]}}
+            )
+
+    for weekly_tab in WEEKLY_SOURCE_TABS.keys():
+        sheet_id = existing_tabs[weekly_tab]
+        num_rows = len(collected[weekly_tab])
+        format_requests.extend(
+            build_tab_format_requests(sheet_id, len(WEEKLY_HEADERS), num_rows)
+        )
+    # Visibility + delete default Sheet1 if present
+    format_requests.extend(visibility_requests)
+    if "Sheet1" in existing_tabs:
+        format_requests.append({"deleteSheet": {"sheetId": existing_tabs["Sheet1"]}})
+
+    _retry(
+        lambda: sheets.spreadsheets()
+        .batchUpdate(spreadsheetId=ssid, body={"requests": format_requests})
+        .execute()
+    )
+
+    # ── Mark cumulative-tab rows as sent ─────────────────────────────
+    print("\n  Marking selected rows with Sent Week...")
+    col_letter = _col_letter(SENT_WEEK_COL)
+    mark_data = []
+    mark_counts = {}
+    for weekly_tab, source_tab in WEEKLY_SOURCE_TABS.items():
+        count = 0
+        for row_num, row in collected[weekly_tab]:
+            # Only write if not already marked with this week's date
+            if str(row[SENT_WEEK_COL] or "").strip() != monday_iso:
+                mark_data.append(
+                    {
+                        "range": f"'{source_tab}'!{col_letter}{row_num}",
+                        "values": [[monday_iso]],
+                    }
+                )
+                count += 1
+        mark_counts[source_tab] = count
+
+    if mark_data:
+        _retry(
+            lambda: sheets.spreadsheets()
+            .values()
+            .batchUpdate(
+                spreadsheetId=OUTPUT_SPREADSHEET_ID,
+                body={"valueInputOption": "RAW", "data": mark_data},
+            )
+            .execute()
+        )
+    for src, cnt in mark_counts.items():
+        print(f"    {src}: stamped {cnt} row(s) with {monday_iso}")
+
+    # ── Done ─────────────────────────────────────────────────────────
+    elapsed = time.time() - start
+    print("\n" + "-" * 70)
+    print(
+        f"  '{sheet_name}' "
+        f"({'CREATED' if created_new else 'UPDATED'}) — {elapsed:.1f}s"
+    )
+    per_tab = ", ".join(f"{t}: {len(collected[t])}" for t in WEEKLY_SOURCE_TABS.keys())
+    print(f"    Rows per tab: {per_tab}")
+    print(f"    Location: Shared Drive '{WEEKLY_SHARED_DRIVE_NAME}'")
+    print(f"    URL: https://docs.google.com/spreadsheets/d/{ssid}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"\n  FATAL: {e}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)

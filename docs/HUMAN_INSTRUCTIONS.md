@@ -154,6 +154,33 @@ Each sheet has 5 filter dropdowns (Campus, Grade, Level, Student Group, Guide Em
 2. If the new campus has non-standard column headers, add the header text to the appropriate field in `MAP_HEADER_MAP` in `config.py`
 3. Re-run the script
 
+## How to Send Weekly Corrections to Support
+
+Every Monday at 07:00 ET, a new Google Sheet appears in the Shared Drive "Weekly Corrections Archive" with the week's corrections packaged up for the data team / support contact.
+
+- **Shared Drive:** https://drive.google.com/drive/folders/0AFQGIqcKjsyFUk9PVA
+- **File name:** `M/D Corrections` based on the Monday of the current week (e.g. `4/20 Corrections`)
+- **Contents:** 3 tabs, each with the 14-col layout matching the approval sheets:
+  - `Correction List` — field mismatches the data team needs to update
+  - `Roster Additions` — new enrollments to add in SIS
+  - `Roster Unenrollments` — unenrollments to process in SIS
+- Empty tabs are hidden automatically — you only see what's actionable.
+
+**How to send it:**
+1. Open the sheet from the Shared Drive
+2. Click Share, add your support contact as Viewer or Editor
+3. Send them the link via email
+
+The same file URL stays valid all week — no need to resend.
+
+**Re-running mid-week:** If more corrections come in through the week, you can trigger the GitHub Actions `Weekly snapshot (Monday)` workflow manually from the Actions tab. It'll find the existing file and update it in place — the URL you already sent stays valid, support just sees the new rows on reload.
+
+### How the Sent Week column works
+
+Every accepted / unenrolled / added row gets stamped with the current Monday's date (e.g. `2026-04-20`) when it's included in a weekly snapshot. The next Monday's run only picks up rows with a blank Sent Week, so you never get duplicates across weeks.
+
+If you ever need to RE-send a row in a later week (rare): manually clear col O on the `_ApprovedData` / `_AdditionsData` / `_UnenrollData` hidden tab for that row. Next Monday's snapshot will pick it back up.
+
 ## Troubleshooting
 
 | Issue | Solution |
@@ -172,3 +199,6 @@ Each sheet has 5 filter dropdowns (Campus, Grade, Level, Student Group, Guide Em
 | Date column in approval sheets has mixed formats (`4/23/2026` mixed with `2026-04-23`) | Older Code.gs race condition. Run `python normalize_dates.py` once to fix historical rows, then re-paste the current `apps_script/Code.gs` to prevent future drift. |
 | A student I accepted/rejected last week is back on Sheet 1 | Expected behavior — the 7-day hide window expired. It means the data team hasn't processed the correction yet. Re-check your box to re-hide, or ping Khiem. |
 | My Accept (col A) / Reject (col B) columns are white/grey instead of green/red | You're probably running an older Apps Script. Re-paste the current `apps_script/Code.gs` from the repo into Extensions > Apps Script. The v2.4.3+ version only modifies cols C–O on checkbox click, so cols A/B keep their permanent green/red column colors. |
+| The weekly sheet didn't generate this Monday | Check GitHub Actions. Go to https://github.com/khiemdoan-studient/weekly-corrections/actions — look for the "Weekly snapshot (Monday)" workflow. If it shows failed/skipped, click it to see logs. To re-run manually: click the Run workflow button on the right. |
+| I see '4/20 Corrections' but it shows last week's data | Expected IF no new corrections were accepted this week. The snapshot includes rows stamped with THIS Monday's date plus any unsent rows. If the data team hasn't processed last week's corrections AND no new ones were accepted, the file stays showing those. Once new rows are accepted, re-trigger the workflow to refresh. |
+| I manually created a sheet in the Shared Drive but the script made a separate one | The script matches exactly by filename `M/D Corrections` (e.g. `4/20 Corrections`). If you made something differently named, the script creates a fresh one alongside. Rename your file or delete one of them. |

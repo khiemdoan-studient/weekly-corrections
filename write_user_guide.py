@@ -238,6 +238,30 @@ text = (
     "This was a rare timing bug in the Apps Script that has been fixed. If you still see mixed formats, "
     "ask Khiem to run the one-time date normalization script. Going forward, all approval dates should "
     "be in 2026-04-23 01:37:44 format.\n"
+    "\n"
+    "PART 8: WEEKLY SUPPORT PACKAGE\n"
+    "\n"
+    "Each Monday morning, a new Google Sheet is created automatically bundling the corrections from "
+    "the past week. This is what Khiem sends to the support team to apply the changes in SIS.\n"
+    "\n"
+    "The sheet lives in a Shared Drive called \u201cWeekly Corrections Archive\u201d. Only Khiem + support "
+    "need access \u2014 IMs don\u2019t need to touch it directly.\n"
+    "\n"
+    "What\u2019s inside each weekly sheet\n"
+    "The sheet is named like \u201c4/20 Corrections\u201d \u2014 the Monday of that week. Inside:\n"
+    "\u2022 Correction List tab \u2014 rows where the IM checked Accept on a field mismatch\n"
+    "\u2022 Roster Additions tab \u2014 rows where the IM checked Accept on a new enrollment\n"
+    "\u2022 Roster Unenrollments tab \u2014 rows where the IM checked Accept on a student who should be unenrolled\n"
+    "\u2022 Tabs with no rows that week are automatically hidden\n"
+    "\n"
+    "Your job as an IM\n"
+    "\u2022 Keep checking Accept/Reject on the corrections spreadsheet throughout the week as usual.\n"
+    "\u2022 Your acceptances flow into the hidden cumulative tabs (_ApprovedData, _AdditionsData, _UnenrollData).\n"
+    "\u2022 When Monday rolls around, Khiem\u2019s automation bundles everything you accepted into the new \u201cM/D Corrections\u201d sheet.\n"
+    "\u2022 You don\u2019t need to do anything \u2014 just keep accepting/rejecting on Sheet 1.\n"
+    "\n"
+    "If you notice your accepted correction is still showing on Sheet 1 after 7 days, the data team "
+    "hasn\u2019t processed that week\u2019s sheet yet. Check in with Khiem.\n"
 )
 
 requests.append({"insertText": {"location": {"index": 1}, "text": text}})
@@ -284,6 +308,7 @@ for title in [
     "PART 5: UNENROLLING A STUDENT (NEW)",
     "PART 6: FIELDS COMPARED",
     "PART 7: TROUBLESHOOTING",
+    "PART 8: WEEKLY SUPPORT PACKAGE",
 ]:
     i = text.find(title)
     if i >= 0:
@@ -316,6 +341,8 @@ for title in [
     "How it works",
     "Important rules",
     "When your checkbox won\u2019t trigger an Unenrolling entry",
+    "What\u2019s inside each weekly sheet",
+    "Your job as an IM",
 ]:
     # Find within appropriate section to avoid duplicates
     i = text.find(title + "\n")

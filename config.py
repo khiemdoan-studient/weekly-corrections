@@ -159,3 +159,59 @@ OUTPUT_FIELDS = [
     "Student_ID",
     "External Student ID",
 ]
+
+# ── Weekly Snapshot (v2.5.0) ───────────────────────────────────────────────
+# Each Monday a new Google Sheet is created named "M/D Corrections" (e.g.
+# "4/20 Corrections"), containing up to 3 tabs — Correction List, Roster
+# Additions, Roster Unenrollments — populated with rows from the hidden
+# cumulative tabs that have NOT yet been included in a prior weekly snapshot.
+#
+# Mechanism: a "Sent Week" column (col O, 0-indexed 14) on _ApprovedData /
+# _AdditionsData / _UnenrollData. When the weekly snapshot runs, any row
+# with blank Sent Week OR Sent Week == current-Monday ISO date is included;
+# the row's Sent Week is then stamped with the current Monday. Re-running
+# the same week updates the sheet in place.
+#
+# _RejectedData does NOT get a Sent Week column (rejected rows don't go
+# to support).
+
+# Shared Drive ID — owned org-level, so no user quota issues. SA is added as
+# Content Manager of this drive in Google Drive UI. Files created here are
+# owned by the drive itself; every drive member automatically has access,
+# so no per-file sharing is needed.
+WEEKLY_SHARED_DRIVE_ID = "0AFQGIqcKjsyFUk9PVA"
+WEEKLY_SHARED_DRIVE_NAME = "Weekly Corrections Archive"
+WEEKLY_TIMEZONE = "America/New_York"
+
+SENT_WEEK_COL = 14  # 0-based column index for "Sent Week" on cumulative tabs
+SENT_WEEK_HEADER = "Sent Week"
+
+# Tab names inside the weekly snapshot file (user-facing)
+WEEKLY_TAB_CORRECTIONS = "Correction List"
+WEEKLY_TAB_ADDITIONS = "Roster Additions"
+WEEKLY_TAB_UNENROLLMENTS = "Roster Unenrollments"
+
+# Weekly-tab → source cumulative tab mapping
+WEEKLY_SOURCE_TABS = {
+    WEEKLY_TAB_CORRECTIONS: "_ApprovedData",
+    WEEKLY_TAB_ADDITIONS: "_AdditionsData",
+    WEEKLY_TAB_UNENROLLMENTS: "_UnenrollData",
+}
+
+# Column headers for the weekly snapshot tabs (14 cols, matches approval sheets)
+WEEKLY_HEADERS = [
+    "Date Approved",
+    "Mismatch Summary",
+    "Campus",
+    "Grade",
+    "Level",
+    "First Name",
+    "Last Name",
+    "Email",
+    "Student Group",
+    "Guide First Name",
+    "Guide Last Name",
+    "Guide Email",
+    "Student_ID",
+    "External Student ID",
+]

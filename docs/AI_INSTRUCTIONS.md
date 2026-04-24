@@ -24,6 +24,11 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | `build_unenroll_queue.py` | ~250 | One-time: create/refresh "Unenroll Queue (Live)" tab on corrections sheet with per-campus QUERY+IMPORTRANGE formulas. Idempotent. |
 | `.github/workflows/hourly-pipeline.yml` | ~40 | GitHub Actions cron: runs `generate_corrections.py` every hour at :00 UTC. Uses `GCP_SA_KEY` secret. |
 | `normalize_dates.py` | ~130 | One-time: normalize date column A in cumulative tabs to canonical `yyyy-MM-dd HH:mm:ss`. Idempotent. Handles both `M/D/YYYY H:MM:SS` and ISO inputs. |
+| `generate_weekly_snapshot.py` | ~500 | Weekly orchestrator: compute Monday ET, find/create sheet in Shared Drive, filter by Sent Week col, write 3 tabs, stamp sent rows |
+| `add_sent_week_column.py` | ~100 | Pre-flight sanity check for Sent Week col O on cumulative tabs. Reports row counts + blank/sent/malformed state. Safe to re-run. |
+| `.github/workflows/weekly-snapshot.yml` | ~50 | GitHub Actions cron: `0 11 * * 1` (Mon 07:00 ET) + workflow_dispatch. Uses GCP_SA_KEY secret. |
+
+Note: `requirements.txt` now includes `tzdata` for Windows (needed by `zoneinfo.ZoneInfo("America/New_York")`).
 
 ## Spreadsheet Architecture
 
@@ -82,6 +87,44 @@ A 7th visible sheet in the corrections spreadsheet that shows IM-flagged student
 - IMPORTRANGE requires one-time 'Allow access' click by the human user when the tab is first opened
 - Complementary to the hourly Python pipeline: Live Queue shows the flag instantly, Python does full SIS comparison hourly (Sheet 5)
 
+### Weekly Snapshot Workflow (v2.5.0)
+
+Separate from the main corrections spreadsheet, a weekly snapshot file is
+generated each Monday bundling corrections not yet sent to support.
+
+- Hosted in a Google Shared Drive "Weekly Corrections Archive" (id
+  `0AFQGIqcKjsyFUk9PVA`). SA is Content Manager.
+- File naming: `M/D Corrections` (e.g. `4/20 Corrections`), Monday of the
+  current week in America/New_York timezone. No year, no zero-pad.
+- Three tabs: `Correction List` (<- _ApprovedData), `Roster Additions`
+  (<- _AdditionsData), `Roster Unenrollments` (<- _UnenrollData). Tabs with
+  0 data rows are hidden (not deleted). Default `Sheet1` is deleted.
+- 14-col header matches the approval sheets: Date Approved, Mismatch Summary,
+  Campus, Grade, Level, First Name, Last Name, Email, Student Group, Guide
+  First Name, Guide Last Name, Guide Email, Student_ID, External Student ID.
+- `_RejectedData` is NOT included (rejected rows don't go to support).
+
+### Sent Week column (v2.5.0)
+
+Col O (0-indexed 14) on `_ApprovedData`, `_AdditionsData`, `_UnenrollData`
+holds the ISO date of the Monday when the row was included in a weekly
+snapshot (e.g. `2026-04-20`). Blank = unsent.
+
+Selection rule in `generate_weekly_snapshot.py::filter_for_week`: include
+rows where col O is blank OR equals current Monday ISO. This means:
+- Rows accepted/approved earlier this week are always included.
+- Rows that were included in THIS week's snapshot (already stamped) are
+  still shown if you re-run during the same week — useful for refreshing
+  the snapshot Wed/Thu after more corrections come in.
+- Rows stamped with a PRIOR week's ISO date are excluded.
+
+After selection, `main()` stamps col O of the selected rows with current
+Monday ISO, so next week's run naturally excludes them.
+
+Cumulative tabs have no header row. Apps Script `appendRow` writes new rows
+starting at row 1 without a header, so col O defaults to blank for newly
+accepted corrections.
+
 ## ISR (Individual Student Roster) Architecture
 
 Each of 9 campuses has a dedicated Google Sheet called an ISR (Individual Student Roster). The ISRs feed the CMR (Consolidated MAP Roster), which in turn feeds the pipeline.
@@ -137,6 +180,14 @@ The pipeline runs automatically every hour via GitHub Actions:
 Hybrid architecture:
 - Real-time UX: "Unenroll Queue (Live)" sheet updates within ~1 min of IM checkbox change (via IMPORTRANGE)
 - Hourly backstop: full pipeline with SIS comparison runs on schedule, updates Sheet 5 (Roster Unenrollments) and other approval sheets
+
+### Weekly Snapshot Workflow
+- File: `.github/workflows/weekly-snapshot.yml`
+- Cron: `0 11 * * 1` (Mon 11:00 UTC = 07:00 ET standard / 06:00 ET DST)
+- Trigger: schedule + workflow_dispatch
+- Concurrency group: shares `weekly-corrections-pipeline` with the hourly
+  workflow so they can't both write cumulative tabs at the same time
+- Runtime: ~5-10s typically
 
 ## Filtering & Sorting Mechanism
 
@@ -214,6 +265,17 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 
 - `HIDE_HANDLED_DAYS = 7` in `config.py` — Tunable window for row-hiding on Sheet 1. Set to 0 to disable and restore always-show-everything behavior.
 
+### Weekly Snapshot Constants (v2.5.0)
+
+- `WEEKLY_SHARED_DRIVE_ID = "0AFQGIqcKjsyFUk9PVA"` — Shared Drive hosting the weekly snapshot files.
+- `WEEKLY_SHARED_DRIVE_NAME = "Weekly Corrections Archive"` — Human-readable name.
+- `WEEKLY_TIMEZONE = "America/New_York"` — ZoneInfo key used to compute the current Monday.
+- `SENT_WEEK_COL = 14` — 0-based col O on cumulative tabs.
+- `SENT_WEEK_HEADER = "Sent Week"` — mostly used for logging; cumulative tabs have no header row.
+- `WEEKLY_TAB_CORRECTIONS = "Correction List"`, `WEEKLY_TAB_ADDITIONS = "Roster Additions"`, `WEEKLY_TAB_UNENROLLMENTS = "Roster Unenrollments"` — weekly file tab names.
+- `WEEKLY_SOURCE_TABS` — dict mapping each weekly tab to its source cumulative tab (`Correction List` -> `_ApprovedData`, `Roster Additions` -> `_AdditionsData`, `Roster Unenrollments` -> `_UnenrollData`).
+- `WEEKLY_HEADERS` — 14-col header list (Date Approved, Mismatch Summary, Campus, Grade, Level, First Name, Last Name, Email, Student Group, Guide First Name, Guide Last Name, Guide Email, Student_ID, External Student ID).
+
 ## Key Design Decisions
 
 1. **QUERY formulas for filtering** — Apps Script `hideRows()` approach failed because it couldn't map dropdown positions to data columns. QUERY formulas auto-recalculate when dropdown cells change.
@@ -226,6 +288,7 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 8. **Hybrid real-time + hourly architecture** — Sheets-only live queue for instant IM feedback (bypass BQ); full pipeline on GitHub Actions hourly schedule for SIS comparison. No pure-Sheets solution exists because Sheets can't query BigQuery.
 9. **Pre-formatted ISO date strings in Code.gs** — Instead of `appendRow([new Date(), ...])` + post-write `setNumberFormat`, we pre-compute the date string via `Utilities.formatDate` and append the raw string. This is race-safe under concurrent onEdit triggers (Apps Script can fire multiple concurrent instances when a user toggles multiple checkboxes quickly). onEdit triggers are simple triggers (not installable), fire synchronously per edit, but Google may invoke multiple in parallel when edits happen within milliseconds. Trade-off: the column now stores strings, not serial dates, so numeric date sort relies on the ISO format being lexicographically equivalent to chronological order (it is).
 10. **Hide accepted/rejected rows for 7 days** — Previously, Sheet 1 always showed every current mismatch, including students who had already been Accept'd or Reject'd. After handling, the pipeline rebuild cleared the checkbox but re-pulled the student, which confused IMs ("I already checked this, why is it back?"). v2.4.4 filters out students handled within `HIDE_HANDLED_DAYS`. After the window, if the mismatch still exists, the student reappears — which signals that the data team hasn't processed the correction yet. This behavior aligned with user expectation even though no prior version had implemented it.
+11. **Shared Drive for weekly snapshot** — Service accounts have 0 bytes of Drive quota by default. Files created by the SA in its own Drive fail with `storageQuotaExceeded` (HTTP 403). Solution: Shared Drive hosts the weekly files — files there are owned by the drive itself, bypassing user quotas. All Drive API calls that touch the Shared Drive must include `supportsAllDrives=True`; `files.list` additionally needs `driveId=<shared_drive_id>`, `corpora='drive'`, `includeItemsFromAllDrives=True`.
 
 ## Common Bugs & Fixes
 
@@ -251,6 +314,8 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 | Inconsistent date formats in cumulative tabs | Apps Script race: `setNumberFormat(getLastRow(), 1)` fired by concurrent onEdit triggers applies to wrong row, leaving some rows in locale default (`4/23/2026 1:37:44`) and others in ISO (`2026-04-23 01:37:44`). Breaks chronological sort. | Code.gs now pre-formats the date as ISO string via `Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss")` BEFORE appendRow, eliminating the race. For historical data: `normalize_dates.py` migrates existing rows. |
 | Accept/Reject col A/B colors missing after checkbox click | Pre-v2.4.3 Code.gs called `setBackground(null)` on cols 1–15, wiping the permanent `#D4EDDA` / `#FEE2E2` applied by `sheets_writer.py`. Pipeline run re-applies them, but Apps Script wipes them again on next click. | Re-paste v2.4.3+ Code.gs — it only touches cols 3–15 (C:O), leaving A/B untouched. |
 | Handled students keep reappearing on Sheet 1 | Pipeline had no handled-state tracking. | v2.4.4 `read_handled_student_ids` + `_hide_recently_handled` exclude them. |
+| `UnicodeEncodeError: 'charmap' codec can't encode '->'` | `generate_weekly_snapshot.py` print statements | Windows cp1252 console doesn't support U+2192 (`->`) or U+2500 (`-`) box-drawing chars | Use ASCII `->` and `-` in print statements. Em-dash `—` (U+2014) works fine in cp1252. |
+| `addBanding: You cannot add alternating background colors to a range that already has alternating background colors` | Re-run of `generate_weekly_snapshot.py` same week | `addBanding` isn't idempotent — errors if range already banded | In `main()`, fetch existing bandings via `spreadsheets.get(fields="sheets(properties.sheetId,bandedRanges)")` and queue `deleteBanding` requests BEFORE the new `addBanding` requests in the same batchUpdate. |
 
 ## Known Limitations
 
