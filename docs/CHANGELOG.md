@@ -1,5 +1,31 @@
 # Changelog
 
+## [v2.5.1] — 2026-04-27
+
+### Fixed
+- **Empty-week cron crash on Monday 4/27** — The 11:00 UTC cron failed because all 29 cumulative-tab rows (23 from `_ApprovedData`, 6 from `_UnenrollData`) were already stamped `2026-04-20` from last week's first run, and no new corrections had been accepted between 4/20 and 4/27. The filter selected 0 rows for the 4/27 week. The script created the file `4/27 Corrections` (id `1pfMlmN2EzjLD4nQIG3b5EDt0EjMQq0xKNhtAj3wqphA`), added 3 weekly tabs, then tried to hide all 3 (each had 0 rows) AND delete the default `Sheet1` — which would have left 0 visible sheets. Sheets API returned 400: `"You can't remove all the visible sheets in a document"`.
+- **`generate_weekly_snapshot.py::main()` step order** — Restructured to read all 3 cumulative source tabs FIRST, before any file create/find. If `total_rows == 0`:
+  - No file exists for this week → log `"No corrections to send this week. File not created."` and exit cleanly. Drive stays clean.
+  - File already exists for this week (e.g. earlier successful run, or leftover orphan) → log and exit; leave the file untouched.
+
+  Otherwise the normal find-or-create + populate flow runs unchanged. Updated the module-level docstring at the top of `generate_weekly_snapshot.py` to reflect the new order (read first, then check empty, then create-or-find).
+
+### Why
+The v2.5.0 success path assumed at least one row would always be selected. It worked on 4/20 because the cumulative tabs had 29 brand-new unstamped rows. By 4/27, every existing row was already stamped and no fresh IM clicks had landed — a perfectly normal state that v2.5.0 didn't anticipate. The fix is purely defensive; the v2.5.0 success path is unchanged.
+
+### Cleanup
+- Orphan `4/27 Corrections` file (id `1pfMlmN2EzjLD4nQIG3b5EDt0EjMQq0xKNhtAj3wqphA`) moved to trash via `files.update(trashed=true)`. The SA has Content Manager role on the Shared Drive, which permits trash but not permanent-delete; trash will auto-empty per Shared Drive retention policy.
+
+### Verified
+- Local run: `python generate_weekly_snapshot.py` → `"No corrections to send this week. File not created. (3.1s)"` → exit 0.
+- Shared Drive `0AFQGIqcKjsyFUk9PVA` lists exactly 1 file: `4/20 Corrections` (id `1TmpjJkFrKQdG_DzxkVrE0YqIb30tdK5ZZTWXNguXA0I`). The orphan is in trash.
+
+### Audit findings (documented, NOT fixed in this PR)
+- **Row-stamp race (medium risk)** — The stamping pass uses row numbers captured during the read pass. If Apps Script's `removeStudentFromCumulativeTabs_` deletes a row in the ~5s window between read and stamp, subsequent row numbers shift, and the stamp could land on the wrong row OR fail with "range not found". Probability is low (5s window + sporadic IM clicks) but non-zero. Mitigation for a future PR: stamp by `student_id` lookup at stamp-time instead of stored row number. Not fixed here to keep this PR scoped to the actual failure.
+
+### User Action Required
+- **None.** The fix is purely defensive — the v2.5.0 success path is unchanged. Next Monday's cron will either create a new file (if there are unsent rows by then) or skip cleanly (if no IMs accept anything before 5/4).
+
 ## [v2.5.0] — 2026-04-24
 
 ### Added

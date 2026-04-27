@@ -8,20 +8,24 @@ in place (same file ID — any existing shares with support remain valid).
 Behavior
 --------
 1. Compute current Monday in America/New_York.
-2. Find-or-create "M/D Corrections" spreadsheet inside the
+2. Read each of the 3 source cumulative tabs (_ApprovedData,
+   _AdditionsData, _UnenrollData) and filter for rows where col O
+   (Sent Week) is blank OR equals the current Monday ISO date.
+3. If 0 unsent rows total → skip file creation, exit cleanly. Drive stays
+   clean for weeks where no IM accepted a correction. (v2.5.1: this was
+   the v2.5.0 bug — empty file → all 3 tabs hidden → deleteSheet on the
+   default Sheet1 → API error "can't remove all visible sheets".)
+4. Otherwise, find-or-create "M/D Corrections" spreadsheet inside the
    WEEKLY_SHARED_DRIVE_ID Shared Drive. Files in a Shared Drive are owned
    by the drive itself, so no per-user quota applies and anyone with drive
    membership automatically has access — no per-file sharing needed.
-3. For each of the 3 source cumulative tabs (_ApprovedData, _AdditionsData,
-   _UnenrollData), read rows where col O (Sent Week) is blank OR equals
-   the current Monday ISO date.
-4. Write those rows into the weekly sheet under tabs:
+5. Write the selected rows into the weekly sheet under tabs:
        Correction List        ← _ApprovedData
        Roster Additions       ← _AdditionsData
        Roster Unenrollments   ← _UnenrollData
    Hide any tab that has 0 data rows. Delete the default "Sheet1" tab
    created with the spreadsheet.
-5. Stamp col O of the selected rows in the cumulative tabs with the
+6. Stamp col O of the selected rows in the cumulative tabs with the
    current Monday ISO (e.g. "2026-04-20"), so next week's run excludes
    them automatically.
 
@@ -338,17 +342,10 @@ def main():
         f"id={WEEKLY_SHARED_DRIVE_ID}"
     )
 
-    # ── Find or create the weekly sheet inside the Shared Drive ──────
-    ssid = find_sheet_in_shared_drive(drive, WEEKLY_SHARED_DRIVE_ID, sheet_name)
-    created_new = False
-    if ssid is None:
-        ssid = create_sheet_in_shared_drive(drive, WEEKLY_SHARED_DRIVE_ID, sheet_name)
-        created_new = True
-        print(f"  Sheet created id={ssid} (new)")
-    else:
-        print(f"  Sheet found id={ssid} (updating in place)")
-
-    # ── Read cumulative tabs, collect rows for this week ─────────────
+    # ── Read cumulative tabs FIRST to know if there's anything to send ──
+    # Done before any file create/find so we don't make an empty file when
+    # there's nothing this week (the v2.5.0 bug — empty file → all 3 tabs
+    # hidden → deleteSheet on Sheet1 → API error "can't remove all visible").
     print("\n  Reading cumulative tabs...")
     collected = {}  # weekly_tab_name → list of (orig_row_num, row_values)
     total_rows = 0
@@ -363,6 +360,39 @@ def main():
             f"{len(rows)} total, {len(filtered)} selected for this week"
         )
         total_rows += len(filtered)
+
+    # ── Empty-week short-circuit ─────────────────────────────────────
+    # If 0 unsent rows, don't create a file. Drive stays clean for weeks
+    # where no IM accepted a correction. If a file already exists for this
+    # week (e.g. an earlier run had rows but they've since been re-stamped,
+    # or a leftover orphan from a failed prior run), leave it untouched —
+    # manual cleanup if needed.
+    if total_rows == 0:
+        existing = find_sheet_in_shared_drive(drive, WEEKLY_SHARED_DRIVE_ID, sheet_name)
+        elapsed = time.time() - start
+        print()
+        if existing is None:
+            print(
+                f"  No corrections to send this week. File not created. "
+                f"({elapsed:.1f}s)"
+            )
+        else:
+            print(f"  No new corrections this week. Existing file left untouched.")
+            print(
+                f"  URL: https://docs.google.com/spreadsheets/d/{existing}  "
+                f"({elapsed:.1f}s)"
+            )
+        return
+
+    # ── Find or create the weekly sheet inside the Shared Drive ──────
+    ssid = find_sheet_in_shared_drive(drive, WEEKLY_SHARED_DRIVE_ID, sheet_name)
+    created_new = False
+    if ssid is None:
+        ssid = create_sheet_in_shared_drive(drive, WEEKLY_SHARED_DRIVE_ID, sheet_name)
+        created_new = True
+        print(f"\n  Sheet created id={ssid} (new)")
+    else:
+        print(f"\n  Sheet found id={ssid} (updating in place)")
 
     # ── Write the weekly sheet ───────────────────────────────────────
     print(f"\n  Writing weekly sheet (total {total_rows} rows)...")

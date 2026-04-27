@@ -158,6 +158,15 @@ Each sheet has 5 filter dropdowns (Campus, Grade, Level, Student Group, Guide Em
 
 Every Monday at 07:00 ET, a new Google Sheet appears in the Shared Drive "Weekly Corrections Archive" with the week's corrections packaged up for the data team / support contact.
 
+**If no IMs accepted any corrections during the past week, no Monday file is
+generated.** The Shared Drive "Weekly Corrections Archive" stays clean. This
+is intentional — there's nothing to send to support that week.
+
+To check what happened on a Monday morning, look at GitHub Actions:
+https://github.com/khiemdoan-studient/weekly-corrections/actions/workflows/weekly-snapshot.yml
+The job log will say either "No corrections to send this week. File not
+created." or it will show row counts and a URL to the new file.
+
 - **Shared Drive:** https://drive.google.com/drive/folders/0AFQGIqcKjsyFUk9PVA
 - **File name:** `M/D Corrections` based on the Monday of the current week (e.g. `4/20 Corrections`)
 - **Contents:** 3 tabs, each with the 14-col layout matching the approval sheets:
@@ -200,5 +209,6 @@ If you ever need to RE-send a row in a later week (rare): manually clear col O o
 | A student I accepted/rejected last week is back on Sheet 1 | Expected behavior — the 7-day hide window expired. It means the data team hasn't processed the correction yet. Re-check your box to re-hide, or ping Khiem. |
 | My Accept (col A) / Reject (col B) columns are white/grey instead of green/red | You're probably running an older Apps Script. Re-paste the current `apps_script/Code.gs` from the repo into Extensions > Apps Script. The v2.4.3+ version only modifies cols C–O on checkbox click, so cols A/B keep their permanent green/red column colors. |
 | The weekly sheet didn't generate this Monday | Check GitHub Actions. Go to https://github.com/khiemdoan-studient/weekly-corrections/actions — look for the "Weekly snapshot (Monday)" workflow. If it shows failed/skipped, click it to see logs. To re-run manually: click the Run workflow button on the right. |
+| "It's Monday and there's no new file in the Shared Drive" | Either (a) no IMs accepted any corrections during the past week, so the snapshot script intentionally skipped file creation — check Actions log for "No corrections to send this week", or (b) the workflow failed — open the most recent run at https://github.com/khiemdoan-studient/weekly-corrections/actions/workflows/weekly-snapshot.yml and read the error. To force a file even when there are no unsent rows: clear col O on a row in the hidden `_ApprovedData` / `_AdditionsData` / `_UnenrollData` tab, then click "Run workflow" on the Actions page. |
 | I see '4/20 Corrections' but it shows last week's data | Expected IF no new corrections were accepted this week. The snapshot includes rows stamped with THIS Monday's date plus any unsent rows. If the data team hasn't processed last week's corrections AND no new ones were accepted, the file stays showing those. Once new rows are accepted, re-trigger the workflow to refresh. |
 | I manually created a sheet in the Shared Drive but the script made a separate one | The script matches exactly by filename `M/D Corrections` (e.g. `4/20 Corrections`). If you made something differently named, the script creates a fresh one alongside. Rename your file or delete one of them. |

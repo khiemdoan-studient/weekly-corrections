@@ -24,7 +24,7 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | `build_unenroll_queue.py` | ~250 | One-time: create/refresh "Unenroll Queue (Live)" tab on corrections sheet with per-campus QUERY+IMPORTRANGE formulas. Idempotent. |
 | `.github/workflows/hourly-pipeline.yml` | ~40 | GitHub Actions cron: runs `generate_corrections.py` every hour at :00 UTC. Uses `GCP_SA_KEY` secret. |
 | `normalize_dates.py` | ~130 | One-time: normalize date column A in cumulative tabs to canonical `yyyy-MM-dd HH:mm:ss`. Idempotent. Handles both `M/D/YYYY H:MM:SS` and ISO inputs. |
-| `generate_weekly_snapshot.py` | ~500 | Weekly orchestrator: compute Monday ET, find/create sheet in Shared Drive, filter by Sent Week col, write 3 tabs, stamp sent rows |
+| `generate_weekly_snapshot.py` | ~530 | Weekly orchestrator: compute Monday ET, find/create sheet in Shared Drive, filter by Sent Week col, write 3 tabs, stamp sent rows |
 | `add_sent_week_column.py` | ~100 | Pre-flight sanity check for Sent Week col O on cumulative tabs. Reports row counts + blank/sent/malformed state. Safe to re-run. |
 | `.github/workflows/weekly-snapshot.yml` | ~50 | GitHub Actions cron: `0 11 * * 1` (Mon 07:00 ET) + workflow_dispatch. Uses GCP_SA_KEY secret. |
 
@@ -87,7 +87,7 @@ A 7th visible sheet in the corrections spreadsheet that shows IM-flagged student
 - IMPORTRANGE requires one-time 'Allow access' click by the human user when the tab is first opened
 - Complementary to the hourly Python pipeline: Live Queue shows the flag instantly, Python does full SIS comparison hourly (Sheet 5)
 
-### Weekly Snapshot Workflow (v2.5.0)
+### Weekly Snapshot Workflow (v2.5.1)
 
 Separate from the main corrections spreadsheet, a weekly snapshot file is
 generated each Monday bundling corrections not yet sent to support.
@@ -103,6 +103,17 @@ generated each Monday bundling corrections not yet sent to support.
   Campus, Grade, Level, First Name, Last Name, Email, Student Group, Guide
   First Name, Guide Last Name, Guide Email, Student_ID, External Student ID.
 - `_RejectedData` is NOT included (rejected rows don't go to support).
+
+Pipeline order (v2.5.1):
+1. Compute current Monday in America/New_York
+2. Read all 3 cumulative tabs and filter for this week
+3. If total_rows == 0:
+   a. Check if a file already exists for this week
+   b. If no -> log "No corrections to send this week. File not created." -> exit
+   c. If yes -> log + leave existing file untouched -> exit
+4. Else: find-or-create the M/D Corrections file in Shared Drive
+5. Write the 3 tabs (hide empty ones, delete default Sheet1)
+6. Stamp col O of selected rows in cumulative tabs with current Monday ISO
 
 ### Sent Week column (v2.5.0)
 
@@ -316,6 +327,7 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 | Handled students keep reappearing on Sheet 1 | Pipeline had no handled-state tracking. | v2.4.4 `read_handled_student_ids` + `_hide_recently_handled` exclude them. |
 | `UnicodeEncodeError: 'charmap' codec can't encode '->'` | `generate_weekly_snapshot.py` print statements | Windows cp1252 console doesn't support U+2192 (`->`) or U+2500 (`-`) box-drawing chars | Use ASCII `->` and `-` in print statements. Em-dash `—` (U+2014) works fine in cp1252. |
 | `addBanding: You cannot add alternating background colors to a range that already has alternating background colors` | Re-run of `generate_weekly_snapshot.py` same week | `addBanding` isn't idempotent — errors if range already banded | In `main()`, fetch existing bandings via `spreadsheets.get(fields="sheets(properties.sheetId,bandedRanges)")` and queue `deleteBanding` requests BEFORE the new `addBanding` requests in the same batchUpdate. |
+| `deleteSheet: You can't remove all the visible sheets` when 0 unsent rows for the week (deeper issue caught after v2.5.0's `addBanding` fix) | In `generate_weekly_snapshot.py::main()`, old order was: create-file -> read-cumulative -> if all 3 weekly tabs empty, hide all + delete Sheet1 -> Google Sheets rejects (0 visible tabs not allowed) | v2.5.1: restructured to read cumulative tabs FIRST. If `total_rows == 0`, log and exit before any file is created. If a file already exists from a prior run, leave it untouched. |
 
 ## Known Limitations
 
@@ -323,3 +335,15 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 - **Cumulative hidden tabs grow indefinitely** — `_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData` are never cleared. Manual cleanup needed periodically.
 - **Banding covers 200 data rows** — Alternating row colors extend to row 206. If cumulative sheets exceed 200 approved rows, increase the `end_row` floor in `_format_visible_sheet()`.
 - **Reason for Rejection column not in QUERY output** — Sheet 6 QUERY reads from `_RejectedData` A:M (13 cols). The "Reason for Rejection" header is in col N (col 14) but the column content is manually entered by IMs, not populated by QUERY.
+- **Row-stamp race**: The stamping pass uses row numbers captured during the
+  earlier read pass. If `apps_script/Code.gs::removeStudentFromCumulativeTabs_`
+  deletes a row from a cumulative tab between the snapshot's read (~T) and
+  stamp (~T+5s), the stored row number can shift, causing the stamp to land
+  on the wrong row OR fail with "range not found". Probability is low (5s
+  window + sporadic IM clicks). Mitigation for a future PR: stamp by
+  student_id lookup at stamp-time instead of stored row number.
+- **SA can trash but not permanent-delete in Shared Drive**: Service account
+  has Content Manager role on `WEEKLY_SHARED_DRIVE_ID`. That allows
+  `files.update(trashed=true)` but NOT `files.delete()`. To permanently
+  delete an orphan, either escalate the SA to Manager role or wait for
+  Shared Drive's auto-empty policy.
