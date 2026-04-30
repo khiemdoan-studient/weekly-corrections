@@ -32,6 +32,9 @@ from config import (
     TAB_REJECTED,
     OUTPUT_FIELDS,
 )
+from retry_helper import (
+    retry_api as _retry_api,
+)  # v2.5.2: shared exponential-backoff helper
 
 # ── Colour constants (matching dashboard pipeline) ─────────────────────────
 
@@ -138,17 +141,9 @@ SORT_OPTS_SHEET6 = [  # _RejectedData 14 cols
 ]
 
 # ── API helpers ────────────────────────────────────────────────────────────
-
-
-def _retry_api(fn, max_retries=3, delay=5):
-    for attempt in range(max_retries):
-        try:
-            return fn()
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise
-            print(f"     Warning: API call failed (attempt {attempt+1}): {e}")
-            time.sleep(delay * (attempt + 1))
+# (Retry helper now imported from retry_helper.py — see v2.5.2 for the
+# 2026-04-29 incident that motivated the upgrade from 3-attempts-linear
+# to 5-attempts-exponential-with-jitter + transient-only catch.)
 
 
 def _ensure_all_tabs(sheets_service, spreadsheet_id, tab_names):

@@ -29,6 +29,8 @@ The pipeline now runs **automatically every hour** via GitHub Actions — you do
 
 Manual runs via `python generate_corrections.py` still work if you ever need one off-cycle, but they aren't necessary for the normal weekly review.
 
+Each Sheets/Drive API call has up to 5 in-script retries with exponential backoff (about 5 minutes of coverage), and GHA itself retries the whole Python step once on failure. You should rarely see a real failure unless the API is down for a long stretch.
+
 ## Row Hide Timing (cheat sheet)
 
 | Action | Latency |
@@ -205,6 +207,7 @@ If you ever need to RE-send a row in a later week (rare): manually clear col O o
 | My Unenroll checkbox isn't showing up in the correction list | (1) Has IMPORTRANGE refreshed? It can take up to a minute. (2) Is SIS actually still showing Enrolled for that student? If SIS already matches MAP, nothing to flag. (3) Has the Python pipeline run since you checked the box? |
 | Unenroll Queue (Live) shows #REF! or is empty | This is a one-time auth prompt from IMPORTRANGE. Click 'Allow access' when you see the pop-up in the sheet — the data will populate within seconds. |
 | Hourly pipeline hasn't run when expected | Check https://github.com/khiemdoan-studient/weekly-corrections/actions for any failed runs. Click 'Re-run all jobs' on a failed workflow or ask Khiem. |
+| GitHub Actions email says a workflow failed, but the next hourly run succeeded | Almost certainly a transient Google Sheets API hiccup. The workflow now retries 5 times in-script with exponential backoff, AND the GHA workflow itself retries the whole Python step once if it exits 1. So a single failure email usually means the API was actually hiccuping for >5 minutes. Check the run log: if you see "[retry] attempt N/5 failed (HttpError 5xx)" lines and then a later run succeeded, it self-recovered. No action needed. |
 | Date column in approval sheets has mixed formats (`4/23/2026` mixed with `2026-04-23`) | Older Code.gs race condition. Run `python normalize_dates.py` once to fix historical rows, then re-paste the current `apps_script/Code.gs` to prevent future drift. |
 | A student I accepted/rejected last week is back on Sheet 1 | Expected behavior — the 7-day hide window expired. It means the data team hasn't processed the correction yet. Re-check your box to re-hide, or ping Khiem. |
 | My Accept (col A) / Reject (col B) columns are white/grey instead of green/red | You're probably running an older Apps Script. Re-paste the current `apps_script/Code.gs` from the repo into Extensions > Apps Script. The v2.4.3+ version only modifies cols C–O on checkbox click, so cols A/B keep their permanent green/red column colors. |

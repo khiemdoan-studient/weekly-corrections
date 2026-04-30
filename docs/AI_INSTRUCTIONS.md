@@ -27,8 +27,11 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | `generate_weekly_snapshot.py` | ~530 | Weekly orchestrator: compute Monday ET, find/create sheet in Shared Drive, filter by Sent Week col, write 3 tabs, stamp sent rows |
 | `add_sent_week_column.py` | ~100 | Pre-flight sanity check for Sent Week col O on cumulative tabs. Reports row counts + blank/sent/malformed state. Safe to re-run. |
 | `.github/workflows/weekly-snapshot.yml` | ~50 | GitHub Actions cron: `0 11 * * 1` (Mon 07:00 ET) + workflow_dispatch. Uses GCP_SA_KEY secret. |
+| `retry_helper.py` | ~120 | Shared retry helper for transient Google API errors. Used by sheets_writer, generate_weekly_snapshot, generate_corrections, and all 4 helper scripts. 5 attempts, exponential backoff (1s/2s/4s/8s/16s), 25% jitter, transient-only catch (HttpError 5xx/429/408 + TimeoutError + socket.timeout + ConnectionError). |
 
 Note: `requirements.txt` now includes `tzdata` for Windows (needed by `zoneinfo.ZoneInfo("America/New_York")`).
+
+Note: `sheets_writer.py` and `generate_weekly_snapshot.py` previously had per-file `_retry_api`/`_retry` helpers — those are now removed in favor of the shared `retry_helper` module (v2.5.2).
 
 ## Spreadsheet Architecture
 
@@ -287,6 +290,20 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 - `WEEKLY_SOURCE_TABS` — dict mapping each weekly tab to its source cumulative tab (`Correction List` -> `_ApprovedData`, `Roster Additions` -> `_AdditionsData`, `Roster Unenrollments` -> `_UnenrollData`).
 - `WEEKLY_HEADERS` — 14-col header list (Date Approved, Mismatch Summary, Campus, Grade, Level, First Name, Last Name, Email, Student Group, Guide First Name, Guide Last Name, Guide Email, Student_ID, External Student ID).
 
+### Retry Helper Defaults (v2.5.2)
+
+These are module-level constants in `retry_helper.py`, tunable in-place if
+outages get longer:
+
+- `DEFAULT_MAX_ATTEMPTS = 5` — total attempts before raising. With exponential
+  backoff (1+2+4+8+16=31s of pure sleep) plus per-attempt API timeouts (~60s),
+  total wall-clock coverage is ~5 minutes.
+- `DEFAULT_BASE_DELAY = 1.0` — first sleep in seconds. Doubles each attempt.
+- `DEFAULT_MAX_DELAY = 30.0` — cap on per-attempt sleep (jitter applied after).
+- `TRANSIENT_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}` — HTTP statuses
+  treated as transient. Anything else (4xx auth errors, 4xx schema errors)
+  raises immediately. Adjust if Google adds a new transient status code.
+
 ## Key Design Decisions
 
 1. **QUERY formulas for filtering** — Apps Script `hideRows()` approach failed because it couldn't map dropdown positions to data columns. QUERY formulas auto-recalculate when dropdown cells change.
@@ -300,6 +317,27 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 9. **Pre-formatted ISO date strings in Code.gs** — Instead of `appendRow([new Date(), ...])` + post-write `setNumberFormat`, we pre-compute the date string via `Utilities.formatDate` and append the raw string. This is race-safe under concurrent onEdit triggers (Apps Script can fire multiple concurrent instances when a user toggles multiple checkboxes quickly). onEdit triggers are simple triggers (not installable), fire synchronously per edit, but Google may invoke multiple in parallel when edits happen within milliseconds. Trade-off: the column now stores strings, not serial dates, so numeric date sort relies on the ISO format being lexicographically equivalent to chronological order (it is).
 10. **Hide accepted/rejected rows for 7 days** — Previously, Sheet 1 always showed every current mismatch, including students who had already been Accept'd or Reject'd. After handling, the pipeline rebuild cleared the checkbox but re-pulled the student, which confused IMs ("I already checked this, why is it back?"). v2.4.4 filters out students handled within `HIDE_HANDLED_DAYS`. After the window, if the mismatch still exists, the student reappears — which signals that the data team hasn't processed the correction yet. This behavior aligned with user expectation even though no prior version had implemented it.
 11. **Shared Drive for weekly snapshot** — Service accounts have 0 bytes of Drive quota by default. Files created by the SA in its own Drive fail with `storageQuotaExceeded` (HTTP 403). Solution: Shared Drive hosts the weekly files — files there are owned by the drive itself, bypassing user quotas. All Drive API calls that touch the Shared Drive must include `supportsAllDrives=True`; `files.list` additionally needs `driveId=<shared_drive_id>`, `corpora='drive'`, `includeItemsFromAllDrives=True`.
+
+### 12. Centralized retry strategy (v2.5.2)
+
+All Google API calls now use the shared `retry_helper.retry_api(fn, ...)`
+helper. The previous per-file helpers (`sheets_writer._retry_api`,
+`generate_weekly_snapshot._retry`) had drift: one caught `Exception` (too
+broad — masked programming bugs), the other caught only `HttpError`
+(missed `TimeoutError`, which was half of the 2026-04-29 incident chain).
+
+The shared helper:
+- Catches ONLY transient API errors (HttpError 5xx/429/408, TimeoutError,
+  socket.timeout, ConnectionError). Programming bugs raise immediately.
+- 5 attempts × exponential backoff (1s, 2s, 4s, 8s, 16s) + 25% jitter.
+  Total ~5 min coverage when API timeout is ~60s per attempt.
+- Each retry logs the attempt count, exception summary, and wait time.
+- Optional `label` parameter for caller-side identification in logs.
+
+GitHub Actions workflows additionally use `nick-fields/retry@v3` to
+re-run the entire Python step once if it exits 1, on top of the
+in-script retries. Cron failure mode goes from "miss this hour" to
+"miss this hour AND next hour" — practically never reached.
 
 ## Common Bugs & Fixes
 
@@ -328,6 +366,7 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 | `UnicodeEncodeError: 'charmap' codec can't encode '->'` | `generate_weekly_snapshot.py` print statements | Windows cp1252 console doesn't support U+2192 (`->`) or U+2500 (`-`) box-drawing chars | Use ASCII `->` and `-` in print statements. Em-dash `—` (U+2014) works fine in cp1252. |
 | `addBanding: You cannot add alternating background colors to a range that already has alternating background colors` | Re-run of `generate_weekly_snapshot.py` same week | `addBanding` isn't idempotent — errors if range already banded | In `main()`, fetch existing bandings via `spreadsheets.get(fields="sheets(properties.sheetId,bandedRanges)")` and queue `deleteBanding` requests BEFORE the new `addBanding` requests in the same batchUpdate. |
 | `deleteSheet: You can't remove all the visible sheets` when 0 unsent rows for the week (deeper issue caught after v2.5.0's `addBanding` fix) | In `generate_weekly_snapshot.py::main()`, old order was: create-file -> read-cumulative -> if all 3 weekly tabs empty, hide all + delete Sheet1 -> Google Sheets rejects (0 visible tabs not allowed) | v2.5.1: restructured to read cumulative tabs FIRST. If `total_rows == 0`, log and exit before any file is created. If a file already exists from a prior run, leave it untouched. |
+| Hourly pipeline crashes during `_ensure_all_tabs` with `HttpError 500 "Internal error encountered"` then `TimeoutError`, exits 1, next hourly run self-recovers | Sustained transient Sheets API hiccup (~3+ min). The old `_retry_api` had only 3 attempts × linear backoff (5s, 10s) = ~2 min coverage; outage outlasted the retry budget | v2.5.2: Replaced with shared `retry_helper.retry_api` — 5 attempts × exponential backoff with jitter (~5 min coverage), transient-only catch. Plus GHA `nick-fields/retry@v3` workflow-level retry as belt-and-suspenders. |
 
 ## Known Limitations
 

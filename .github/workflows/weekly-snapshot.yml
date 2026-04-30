@@ -42,8 +42,13 @@ jobs:
           printf '%s' "$GCP_SA_KEY" > keys/sa-main.json
           python -c "import json; json.load(open('keys/sa-main.json'))"
 
-      - name: Run generate_weekly_snapshot.py
-        run: python generate_weekly_snapshot.py
+      - name: Run generate_weekly_snapshot.py (with retry on failure)
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 2
+          timeout_minutes: 8
+          retry_wait_seconds: 60
+          command: python generate_weekly_snapshot.py
 
       - name: Clean up credentials
         if: always()

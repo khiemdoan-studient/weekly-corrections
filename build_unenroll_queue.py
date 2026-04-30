@@ -23,6 +23,7 @@ from config import (
     OUTPUT_SPREADSHEET_ID,
     ISR_CONFIG,
 )
+from retry_helper import retry_api  # v2.5.2
 
 TAB_NAME = "Unenroll Queue (Live)"
 
@@ -169,12 +170,15 @@ def main():
     current_row = 5
     formulas_data = []
     for cmr_tab, conf in ISR_CONFIG.items():
-        # Look up CMR Unenroll column position by reading the CMR header
-        headers_resp = (
-            sheets.spreadsheets()
+        # Look up CMR Unenroll column position by reading the CMR header.
+        # v2.5.2: wrapped — per-campus loop, transient errors shouldn't drop
+        # the rest of the campus list.
+        headers_resp = retry_api(
+            lambda t=cmr_tab: sheets.spreadsheets()
             .values()
-            .get(spreadsheetId=MAP_SPREADSHEET_ID, range=f"'{cmr_tab}'!A1:AE1")
-            .execute()
+            .get(spreadsheetId=MAP_SPREADSHEET_ID, range=f"'{t}'!A1:AE1")
+            .execute(),
+            label=f"read CMR '{cmr_tab}' header",
         )
         headers = headers_resp.get("values", [[]])[0]
         unenroll_col_idx = None

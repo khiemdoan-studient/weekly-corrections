@@ -34,6 +34,7 @@ from config import (
     SENT_WEEK_HEADER,
     WEEKLY_SOURCE_TABS,
 )
+from retry_helper import retry_api  # v2.5.2
 
 ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -56,10 +57,11 @@ def main():
     sheets = build("sheets", "v4", credentials=creds)
 
     # Confirm all tabs exist
-    ss_meta = (
-        sheets.spreadsheets()
+    ss_meta = retry_api(
+        lambda: sheets.spreadsheets()
         .get(spreadsheetId=OUTPUT_SPREADSHEET_ID, fields="sheets.properties.title")
-        .execute()
+        .execute(),
+        label="get spreadsheet metadata",
     )
     tab_names = {s["properties"]["title"] for s in ss_meta.get("sheets", [])}
 
@@ -78,14 +80,15 @@ def main():
 
     for tab in target_tabs:
         # Read A:O so we see actual data rows, not just col O (which may be empty)
-        resp = (
-            sheets.spreadsheets()
+        resp = retry_api(
+            lambda t=tab: sheets.spreadsheets()
             .values()
             .get(
                 spreadsheetId=OUTPUT_SPREADSHEET_ID,
-                range=f"'{tab}'!A:{col_letter}",
+                range=f"'{t}'!A:{col_letter}",
             )
-            .execute()
+            .execute(),
+            label=f"read '{tab}' col O",
         )
         rows = resp.get("values", [])
         unsent = 0

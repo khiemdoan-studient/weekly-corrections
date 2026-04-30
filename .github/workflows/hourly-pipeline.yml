@@ -39,8 +39,13 @@ jobs:
           # Sanity check that it's valid JSON
           python -c "import json; json.load(open('keys/sa-main.json'))"
 
-      - name: Run generate_corrections.py
-        run: python generate_corrections.py
+      - name: Run generate_corrections.py (with retry on failure)
+        uses: nick-fields/retry@v3
+        with:
+          max_attempts: 2
+          timeout_minutes: 8
+          retry_wait_seconds: 60
+          command: python generate_corrections.py
 
       - name: Clean up credentials
         if: always()

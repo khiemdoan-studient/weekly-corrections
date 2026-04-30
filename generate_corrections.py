@@ -27,6 +27,7 @@ from config import (
 )
 from datetime import datetime, timedelta
 from queries import query_alpha_roster
+from retry_helper import retry_api  # v2.5.2: shared exponential-backoff retry
 from sheets_writer import write_corrections
 
 
@@ -74,17 +75,21 @@ def read_map_roster(sheets_service):
     skipped_sheets = []
 
     for sheet_name in CAMPUS_SHEETS:
-        # Read entire sheet including header row
+        # Read entire sheet including header row.
+        # v2.5.2: wrapped in retry_api so transient 5xx/Timeout doesn't drop
+        # a whole campus for the run. Permanent errors (404 missing tab, etc.)
+        # still raise and get caught by the except, which logs and skips.
         range_str = f"'{sheet_name}'!A1:AE"
         try:
-            resp = (
-                sheets_service.spreadsheets()
+            resp = retry_api(
+                lambda: sheets_service.spreadsheets()
                 .values()
                 .get(
                     spreadsheetId=MAP_SPREADSHEET_ID,
                     range=range_str,
                 )
-                .execute()
+                .execute(),
+                label=f"read MAP roster '{sheet_name}'",
             )
         except Exception as e:
             print(f"  WARNING: Could not read '{sheet_name}': {e}")
@@ -431,12 +436,16 @@ def read_handled_student_ids(sheets_service, days_back):
     handled = set()
 
     for tab in ["_ApprovedData", "_AdditionsData", "_UnenrollData", "_RejectedData"]:
+        # v2.5.2: wrapped in retry_api. If transient errors exhaust all
+        # retries, fall through to silent skip (existing behavior — the
+        # next hourly run will catch up).
         try:
-            resp = (
-                sheets_service.spreadsheets()
+            resp = retry_api(
+                lambda t=tab: sheets_service.spreadsheets()
                 .values()
-                .get(spreadsheetId=OUTPUT_SPREADSHEET_ID, range=f"'{tab}'!A:M")
-                .execute()
+                .get(spreadsheetId=OUTPUT_SPREADSHEET_ID, range=f"'{t}'!A:M")
+                .execute(),
+                label=f"read handled ids from '{tab}'",
             )
         except Exception:
             continue

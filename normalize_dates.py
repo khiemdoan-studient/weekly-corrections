@@ -22,6 +22,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 from config import SERVICE_ACCOUNT_KEY, SCOPES, OUTPUT_SPREADSHEET_ID
+from retry_helper import retry_api  # v2.5.2
 
 CUMULATIVE_TABS = [
     "_ApprovedData",
@@ -61,10 +62,11 @@ def parse_date(value):
 
 
 def get_sheet_id(sheets, spreadsheet_id, tab_name):
-    resp = (
-        sheets.spreadsheets()
+    resp = retry_api(
+        lambda: sheets.spreadsheets()
         .get(spreadsheetId=spreadsheet_id, fields="sheets.properties")
-        .execute()
+        .execute(),
+        label="get sheet metadata",
     )
     for s in resp.get("sheets", []):
         if s["properties"]["title"] == tab_name:
@@ -74,11 +76,12 @@ def get_sheet_id(sheets, spreadsheet_id, tab_name):
 
 def normalize_tab(sheets, spreadsheet_id, tab_name):
     # Read the Date column (A) with FORMATTED_VALUE so we see how the user sees it.
-    resp = (
-        sheets.spreadsheets()
+    resp = retry_api(
+        lambda: sheets.spreadsheets()
         .values()
         .get(spreadsheetId=spreadsheet_id, range=f"'{tab_name}'!A1:A")
-        .execute()
+        .execute(),
+        label=f"read '{tab_name}' col A",
     )
     rows = resp.get("values", [])
     if not rows:
@@ -114,44 +117,55 @@ def normalize_tab(sheets, spreadsheet_id, tab_name):
     )
 
     # Write back column A. Use RAW so Google doesn't try to re-interpret the string.
-    sheets.spreadsheets().values().update(
-        spreadsheetId=spreadsheet_id,
-        range=f"'{tab_name}'!A1",
-        valueInputOption="RAW",
-        body={"values": normalized},
-    ).execute()
+    retry_api(
+        lambda: sheets.spreadsheets()
+        .values()
+        .update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab_name}'!A1",
+            valueInputOption="RAW",
+            body={"values": normalized},
+        )
+        .execute(),
+        label=f"write normalized dates to '{tab_name}'",
+    )
 
     # Apply consistent number format at the cell level. Since the values are now
     # strings (not serial numbers), the format doesn't reinterpret them — it just
     # keeps display consistent if Google later tries to auto-parse.
     sheet_id = get_sheet_id(sheets, spreadsheet_id, tab_name)
     if sheet_id is not None:
-        sheets.spreadsheets().batchUpdate(
-            spreadsheetId=spreadsheet_id,
-            body={
-                "requests": [
-                    {
-                        "repeatCell": {
-                            "range": {
-                                "sheetId": sheet_id,
-                                "startRowIndex": 0,
-                                "endRowIndex": len(rows) + 100,
-                                "startColumnIndex": 0,
-                                "endColumnIndex": 1,
-                            },
-                            "cell": {
-                                "userEnteredFormat": {
-                                    "numberFormat": {
-                                        "type": "TEXT",
+        retry_api(
+            lambda: sheets.spreadsheets()
+            .batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body={
+                    "requests": [
+                        {
+                            "repeatCell": {
+                                "range": {
+                                    "sheetId": sheet_id,
+                                    "startRowIndex": 0,
+                                    "endRowIndex": len(rows) + 100,
+                                    "startColumnIndex": 0,
+                                    "endColumnIndex": 1,
+                                },
+                                "cell": {
+                                    "userEnteredFormat": {
+                                        "numberFormat": {
+                                            "type": "TEXT",
+                                        }
                                     }
-                                }
-                            },
-                            "fields": "userEnteredFormat.numberFormat",
+                                },
+                                "fields": "userEnteredFormat.numberFormat",
+                            }
                         }
-                    }
-                ]
-            },
-        ).execute()
+                    ]
+                },
+            )
+            .execute(),
+            label=f"apply TEXT format to '{tab_name}'",
+        )
 
 
 def main():

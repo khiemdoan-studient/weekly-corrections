@@ -26,6 +26,7 @@ from config import (
     MAP_SPREADSHEET_ID,
     ISR_CONFIG,
 )
+from retry_helper import retry_api  # v2.5.2
 
 
 def col_letter(i):
@@ -189,11 +190,14 @@ def ensure_mr_unenroll(sheets, isr_id, sr_col_idx, mr_col_idx, row_count):
 def setup_cmr_importrange(sheets, cmr_tab, isr_id, mr_col_idx):
     """Write IMPORTRANGE formula in CMR's Unenroll column, pulling from ISR's MR."""
     # Find the CMR's Unenroll column (varies per campus: AD [29] or AC [28])
-    resp = (
-        sheets.spreadsheets()
+    # v2.5.2: wrapped — this runs in a per-campus loop; one transient error
+    # shouldn't drop the rest of the campus list.
+    resp = retry_api(
+        lambda: sheets.spreadsheets()
         .values()
         .get(spreadsheetId=MAP_SPREADSHEET_ID, range=f"'{cmr_tab}'!A1:AE1")
-        .execute()
+        .execute(),
+        label=f"read CMR '{cmr_tab}' header",
     )
     headers = resp.get("values", [[]])[0]
     cmr_unenroll_col = None
@@ -214,12 +218,18 @@ def setup_cmr_importrange(sheets, cmr_tab, isr_id, mr_col_idx):
         f'"MAP Roster!{mr_col}2:{mr_col}")'
     )
 
-    sheets.spreadsheets().values().update(
-        spreadsheetId=MAP_SPREADSHEET_ID,
-        range=f"'{cmr_tab}'!{cmr_col}2",
-        valueInputOption="USER_ENTERED",
-        body={"values": [[formula]]},
-    ).execute()
+    retry_api(
+        lambda: sheets.spreadsheets()
+        .values()
+        .update(
+            spreadsheetId=MAP_SPREADSHEET_ID,
+            range=f"'{cmr_tab}'!{cmr_col}2",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[formula]]},
+        )
+        .execute(),
+        label=f"write IMPORTRANGE to CMR '{cmr_tab}'",
+    )
     print(f"  [OK] CMR '{cmr_tab}' {cmr_col}2 <- IMPORTRANGE from ISR MR!{mr_col}")
 
 

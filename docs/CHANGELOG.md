@@ -1,5 +1,41 @@
 # Changelog
 
+## [v2.5.2] — 2026-04-30
+
+### Added
+- **`retry_helper.py`** (~120 lines) — shared retry helper exposing `retry_api(fn, max_attempts=5, base_delay=1.0, max_delay=30.0, label="")`. Replaces the per-file `_retry_api` (sheets_writer.py) and `_retry` (generate_weekly_snapshot.py). Strategy:
+  - 5 attempts total (was 3 in both legacy helpers).
+  - Exponential backoff: 1s, 2s, 4s, 8s, 16s — ~31s of pure sleeps, ~5 minutes of total coverage with the ~60s-per-attempt API timeout. Up from ~2 minutes.
+  - 25% random jitter on each sleep so concurrent workflows (hourly + weekly) don't synchronize their retries during a Sheets brownout.
+  - **Transient-only catch**: `HttpError` with status in `{408, 429, 500, 502, 503, 504}`, plus `TimeoutError`, `socket.timeout`, and `ConnectionError`. Programming bugs (`KeyError`, `AttributeError`, etc.) raise immediately instead of being masked by retries — the legacy `sheets_writer._retry_api` had a bare `except Exception` that hid these.
+  - Each retry logs which attempt + why + how long it'll wait, with optional `label` for the call site.
+- **GitHub Actions workflow-level retry** — both `hourly-pipeline.yml` and `weekly-snapshot.yml` now wrap the Python step in `nick-fields/retry@v3` with `max_attempts: 2, timeout_minutes: 8, retry_wait_seconds: 60`. Belt-and-suspenders defense — even if the in-script retry exhausts, GHA re-runs the entire job once for free.
+
+### Changed
+- **`sheets_writer.py`** — replaced the local `_retry_api` (3 attempts, linear, broad `except Exception`) with `from retry_helper import retry_api as _retry_api`. All 26+ existing call sites unchanged.
+- **`generate_weekly_snapshot.py`** — replaced the local `_retry` (3 attempts, linear, `HttpError`-only — couldn't catch the `TimeoutError` half of the 4/29 failure chain) with `from retry_helper import retry_api as _retry`. All 11 existing call sites unchanged.
+- **`generate_corrections.py`** — wrapped two API calls that previously had no retry coverage at all:
+  - `read_map_roster` campus sheet `.get().execute()` — was bare; a transient 500 silently dropped a campus from that hour's run.
+  - `read_handled_student_ids` cumulative-tab `.get().execute()` — was inside a bare `except: continue`; a transient 500 silently treated the tab as empty for that hour, which would have re-flagged already-handled students on Sheet 1.
+- **Helper scripts** (`add_sent_week_column.py`, `normalize_dates.py`, `setup_unenroll_columns.py`, `build_unenroll_queue.py`) — added `retry_helper` import and wrapped the loop-internal per-tab/per-campus API calls where a transient error would otherwise drop the rest of the iteration.
+
+### Fixed
+- **The 2026-04-29 hourly cron failure class** — `_ensure_all_tabs` in `sheets_writer.py` raised `HttpError 500 "Internal error encountered"` → `TimeoutError: The read operation timed out` → exhausted 3 retries → exit 1. Subsequent hourly runs self-recovered, confirming transient. The 2026-04-28 hourly run had failed in the same class. The new retry budget covers ~5 min of API hiccups instead of ~2 min, and the workflow-level retry adds another full job re-run on top of that.
+
+### Why
+The legacy `_retry` in `generate_weekly_snapshot.py` only caught `HttpError`, so the `TimeoutError` half of the 4/29 chain bypassed the retry entirely. The legacy `_retry_api` in `sheets_writer.py` did catch broad `Exception` but only gave 3 attempts with linear backoff (~2 minutes), which wasn't enough headroom for the 4/29 brownout. Centralizing on a single tuned helper fixes both gaps and means future tuning (e.g. raising `max_attempts` to 7 if Google has a longer outage) only touches one file.
+
+### Verified
+- `python -m py_compile` passes on all 8 modified Python files.
+- 5-test in-test smoke suite for `retry_helper`: success-first-try, transient-then-success, `KeyError` fail-fast, `HttpError 500` retries, `HttpError 404` fail-fast — all pass.
+- Live integration: `python generate_weekly_snapshot.py` ran end-to-end, picked up 2 new corrections accepted since the prior run, created `4/27 Corrections` (id `1z-aL77kzA37VNzvg6lSEye8o5J1H_GiB8ezQjlzzd6U`) in the Shared Drive, stamped both rows with `2026-04-27`. No regressions.
+
+### Scope note
+The user explicitly chose the comprehensive scope (over the tighter "fix sheets_writer + generate_weekly_snapshot only"): centralize the retry logic into a single shared module and import it everywhere, including helper scripts. Single point of tuning beats 8 copies that drift over time.
+
+### User Action Required
+- **None.** Next hourly cron picks up the new retry behavior automatically. The workflow-level GHA retry kicks in only if the Python script exits 1 — the hope is it never has to.
+
 ## [v2.5.1] — 2026-04-27
 
 ### Fixed

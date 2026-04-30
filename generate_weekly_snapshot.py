@@ -91,16 +91,12 @@ def compute_monday(tz_name):
     return monday, f"{monday.month}/{monday.day}", monday.isoformat()
 
 
-def _retry(fn, attempts=3, delay=5):
-    for i in range(attempts):
-        try:
-            return fn()
-        except HttpError as e:
-            if i == attempts - 1:
-                raise
-            print(f"    [retry] HttpError {e.resp.status}: {e}  — sleeping {delay}s")
-            time.sleep(delay * (i + 1))
-
+# v2.5.2: retry helper now imported from retry_helper.py — was 3-attempts-
+# linear-backoff with HttpError-only catch, which missed TimeoutError and
+# couldn't span sustained transient outages. New helper does 5 attempts
+# exponential + jitter and catches HttpError 5xx/429/408, TimeoutError,
+# socket.timeout, and ConnectionError.
+from retry_helper import retry_api as _retry  # noqa: E402
 
 # ── Drive operations (Shared Drive mode) ───────────────────────────────────
 # All Drive API calls need supportsAllDrives=True and files.list additionally
