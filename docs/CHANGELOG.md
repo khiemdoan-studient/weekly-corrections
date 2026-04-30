@@ -1,5 +1,44 @@
 # Changelog
 
+## [v2.5.3] — 2026-04-30
+
+### Added
+- **`health_report.py`** (~190 lines) — pipeline health summary script. Queries the last N days of GitHub Actions runs via the `gh` CLI for both `hourly-pipeline.yml` and `weekly-snapshot.yml`. Computes (1) total runs, (2) success rate %, (3) failure count, (4) cancelled count, (5) max consecutive failure streak, (6) currently-failing streak, (7) last failure timestamp, (8) median run duration. Output is Markdown — suitable for posting as a tracking Issue or reading locally. CLI flags: `--days N`, `--repo OWNER/NAME`, `--output PATH`.
+- **`.github/workflows/weekly-health-report.yml`** — cron `0 12 * * 1` (Monday 12:00 UTC, an hour after the weekly snapshot at 11:00). Runs `health_report.py --days 30`, opens a GitHub Issue titled `📊 Weekly health report — YYYY-MM-DD` with the summary, labeled `health-report`. The last 4 weeks' issues stay open as a rolling history so you can scan trends at a glance. Includes `workflow_dispatch` for manual runs.
+- **Smart-notify step** in both `hourly-pipeline.yml` and `weekly-snapshot.yml` — a final `if: always()` step using `actions/github-script@v7` that:
+  - On job failure: queries the last 10 runs of THIS workflow, counts consecutive failures, and opens (or comments on) a tracking Issue titled `🚨 <workflow-name> persistently failing` with label `pipeline-failure` once the threshold is hit (env `THRESHOLD: '3'`). Idempotent — won't open duplicates.
+  - On job success: if a tracking issue is open, comments `Pipeline recovered. Auto-closing` and closes it.
+  - Net effect: zero open `pipeline-failure` issues = healthy. An open one = a real, persistent failure (real signal).
+  - Both workflows now have a top-level `permissions:` block granting `issues: write` + `actions: read`.
+
+### Fixed
+- **Row-stamp race in `generate_weekly_snapshot.py`** (HIGH-severity finding from the v2.5.1 audit, finally fixed) — previously stamped cumulative-tab rows by row number stored from the earlier read pass. If Apps Script's `removeStudentFromCumulativeTabs_` deleted a row in the ~5s window between read (~T) and stamp (~T+5s), stored row numbers shifted and the stamp could land on the wrong row. v2.5.3 re-reads col M (Student_ID) immediately before stamping, builds a `student_id → current_row_num` map, and looks up by sid at stamp time. Race window shrunk from ~5s to ~milliseconds. Rows that vanished entirely between read and stamp are silently skipped — they'll be re-picked-up by the next run if they reappear with a blank `Sent Week`.
+
+### Why this is comprehensive (and why "comprehensive" still doesn't mean "zero failures")
+Cloud APIs sometimes hiccup for longer than even our beefy retry budget. The real prevention strategy is layered:
+1. **v2.5.2** — in-script retry + GHA workflow-level retry absorbs ~99% of transient blips silently.
+2. **v2.5.3 smart-notify** — the remaining 1% only escalate when persistent (3+ consecutive failures = something actually broken). Single transient blips no longer email you.
+3. **v2.5.3 health report** — weekly summary lets you see trends; if success rate drifts down over time, you'll catch it.
+4. **v2.5.3 row-stamp fix** — failed runs no longer leave stamping in a bad state on the cumulative tabs.
+
+Out of scope deliberately: an architectural rebuild (move scheduler from GHA to GCP Cloud Scheduler, decouple state from the Sheets API) — days of work and a large blast radius, reserved for if v2.5.x doesn't get us where we want. Other audit findings (CUM-002 unbounded growth, WRITE-003 migration sequence) are documented and deferred — not currently triggering.
+
+### Verified
+- `python -m py_compile` passes on `generate_weekly_snapshot.py` and `health_report.py`.
+- Live integration: `python generate_weekly_snapshot.py` ran end-to-end with the new student_id-lookup stamping. Idempotent on re-run: `stamped 0 row(s)` because rows were already marked from the prior run.
+- Live integration: `python health_report.py --days 14` returned correct counts:
+  - `hourly-pipeline.yml`: 103 runs, 98.1% success, 2 failures (4/28 + 4/29), max streak 1.
+  - `weekly-snapshot.yml`: 1 run (4/27 failed cron), max streak 1, currently failing 1 (below threshold of 3, so no tracking issue opened).
+
+### Failure-budget framing
+Before v2.5.x: ~98% hourly success rate, every failure → email noise. After v2.5.3: same ~99%+ success rate, but you ONLY hear about persistent failures (3+ consecutive ≈ ~3 hours of real outage). Single-blip failures are absorbed silently. The weekly health digest gives you trend visibility without alert fatigue.
+
+### User Action Required
+- **Mute the default GitHub Actions failure email** — Settings → Notifications → uncheck "Send notifications for failed workflows only for workflows I trigger" (label varies by GitHub UI). Without this, you'll get BOTH the legacy failure emails AND the new smart-notify Issue notifications.
+- **Subscribe to issues with label `pipeline-failure`** for actual signal. Watch the repo for issues, or add `pipeline-failure` to your notification preferences.
+- **Optional: subscribe to label `health-report`** to get the weekly summary issue.
+- Next Monday 5/4 12:00 UTC, the first weekly health report issue should appear automatically.
+
 ## [v2.5.2] — 2026-04-30
 
 ### Added

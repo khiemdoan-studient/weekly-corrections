@@ -94,3 +94,22 @@ The `alpha_roster` BQ table must exist. It is created by step 11b of `Refresh-Da
 5. Data team processes approval sheets every Friday
 
 See `docs/AI_INSTRUCTIONS.md` for architecture details and `docs/HUMAN_INSTRUCTIONS.md` for user-facing workflow.
+
+## Pipeline Health & Monitoring
+
+### Daily / hourly health
+Both workflows run with retry hardening (v2.5.2) and only open a tracking
+Issue (label `pipeline-failure`) on 3+ consecutive failures (v2.5.3 smart-
+notify). Single transient API blips are absorbed silently.
+
+### Weekly health summary
+Every Monday at 12:00 UTC, `weekly-health-report.yml` opens a tracking
+Issue (label `health-report`) summarizing the last 30 days: success rate,
+failure count, median duration, etc.
+
+### On-demand health check
+```bash
+python health_report.py --days 30
+# or write to a file:
+python health_report.py --days 30 --output health.md
+```

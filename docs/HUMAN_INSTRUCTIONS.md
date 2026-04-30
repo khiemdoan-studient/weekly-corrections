@@ -31,6 +31,39 @@ Manual runs via `python generate_corrections.py` still work if you ever need one
 
 Each Sheets/Drive API call has up to 5 in-script retries with exponential backoff (about 5 minutes of coverage), and GHA itself retries the whole Python step once on failure. You should rarely see a real failure unless the API is down for a long stretch.
 
+## Pipeline alerts (v2.5.3)
+
+### What changed
+The pipeline now only escalates persistent failures, not transient blips.
+You should rarely get a failure email anymore.
+
+### How to set up notifications
+1. **Mute the default GitHub Actions failure emails** —
+   - Visit https://github.com/settings/notifications
+   - Under "Actions" → uncheck "Send notifications for failed workflows
+     for workflows you triggered" (or similar)
+   - Without this step, you'll keep getting an email for every transient
+     blip alongside the new smart-notify issues.
+
+2. **Subscribe to the new tracking issues**
+   - GitHub Issues with label `pipeline-failure` open ONLY when 3+
+     consecutive runs fail. This is your real alert.
+   - GitHub Issues with label `health-report` open every Monday with a
+     30-day summary. This is your trend visibility.
+   - Watch the repo at https://github.com/khiemdoan-studient/weekly-corrections
+     and set notification preferences to "Issues" only (or use a label-
+     filtered subscription).
+
+### What you'll see
+- **Single failure**: nothing — the workflow retries internally and the
+  next hourly run absorbs it. You can verify by checking the run log.
+- **3+ consecutive failures**: a tracking issue opens on the repo,
+  GitHub emails you. Investigate the run log.
+- **Recovery after persistent failure**: the tracking issue auto-closes
+  with a comment "Pipeline recovered. Auto-closing".
+- **Every Monday at 8 AM ET**: a health-report issue with a 30-day
+  summary appears.
+
 ## Row Hide Timing (cheat sheet)
 
 | Action | Latency |
@@ -215,3 +248,5 @@ If you ever need to RE-send a row in a later week (rare): manually clear col O o
 | "It's Monday and there's no new file in the Shared Drive" | Either (a) no IMs accepted any corrections during the past week, so the snapshot script intentionally skipped file creation — check Actions log for "No corrections to send this week", or (b) the workflow failed — open the most recent run at https://github.com/khiemdoan-studient/weekly-corrections/actions/workflows/weekly-snapshot.yml and read the error. To force a file even when there are no unsent rows: clear col O on a row in the hidden `_ApprovedData` / `_AdditionsData` / `_UnenrollData` tab, then click "Run workflow" on the Actions page. |
 | I see '4/20 Corrections' but it shows last week's data | Expected IF no new corrections were accepted this week. The snapshot includes rows stamped with THIS Monday's date plus any unsent rows. If the data team hasn't processed last week's corrections AND no new ones were accepted, the file stays showing those. Once new rows are accepted, re-trigger the workflow to refresh. |
 | I manually created a sheet in the Shared Drive but the script made a separate one | The script matches exactly by filename `M/D Corrections` (e.g. `4/20 Corrections`). If you made something differently named, the script creates a fresh one alongside. Rename your file or delete one of them. |
+| I want to see the pipeline's recent run history at a glance | Run `python health_report.py --days 30` from the repo root. Or look at https://github.com/khiemdoan-studient/weekly-corrections/issues?q=label%3Ahealth-report for the auto-generated weekly summaries. |
+| There's an open issue with label `pipeline-failure` and I want to know which workflow is broken | The issue title contains the workflow name (e.g. "🚨 Hourly corrections pipeline persistently failing"). The body links to the most recent failed run. Click that link to see the error. |

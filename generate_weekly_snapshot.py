@@ -482,23 +482,61 @@ def main():
     )
 
     # ── Mark cumulative-tab rows as sent ─────────────────────────────
+    # v2.5.3: stamp by student_id lookup, NOT by stored row number. The
+    # stored row numbers from collected[...] are from the earlier read pass
+    # (~5s ago); Apps Script's removeStudentFromCumulativeTabs_ may have
+    # deleted/shifted rows since then, which would cause stale row numbers
+    # to land on the WRONG row. Re-reading col M (Student_ID) right before
+    # stamping shrinks the race window from ~5s to ~milliseconds.
     print("\n  Marking selected rows with Sent Week...")
     col_letter = _col_letter(SENT_WEEK_COL)
+    SID_COL_INDEX = 12  # col M = Student_ID (0-indexed) in the 14-col layout
     mark_data = []
     mark_counts = {}
+    skipped_deleted = (
+        {}
+    )  # source_tab -> count of rows that vanished between read and stamp
     for weekly_tab, source_tab in WEEKLY_SOURCE_TABS.items():
         count = 0
-        for row_num, row in collected[weekly_tab]:
+        skipped = 0
+        if not collected[weekly_tab]:
+            mark_counts[source_tab] = 0
+            skipped_deleted[source_tab] = 0
+            continue
+
+        # Re-read col M to get CURRENT row positions, then stamp by sid lookup.
+        sid_resp = _retry(
+            lambda t=source_tab: sheets.spreadsheets()
+            .values()
+            .get(spreadsheetId=OUTPUT_SPREADSHEET_ID, range=f"'{t}'!M:M")
+            .execute(),
+            label=f"re-read {source_tab} student_ids for stamping",
+        )
+        current_sid_to_row = {}
+        for i, sid_row in enumerate(sid_resp.get("values", []), start=1):
+            if sid_row and sid_row[0]:
+                current_sid_to_row[str(sid_row[0]).strip()] = i
+
+        for _orig_row_num, row in collected[weekly_tab]:
+            sid = str(row[SID_COL_INDEX] or "").strip()
+            if not sid or sid not in current_sid_to_row:
+                # Row was deleted/shifted by Apps Script between read and stamp.
+                # Skip silently — the row will be picked up next snapshot run if
+                # it still exists with blank Sent Week.
+                skipped += 1
+                continue
+            current_row_num = current_sid_to_row[sid]
             # Only write if not already marked with this week's date
             if str(row[SENT_WEEK_COL] or "").strip() != monday_iso:
                 mark_data.append(
                     {
-                        "range": f"'{source_tab}'!{col_letter}{row_num}",
+                        "range": f"'{source_tab}'!{col_letter}{current_row_num}",
                         "values": [[monday_iso]],
                     }
                 )
                 count += 1
         mark_counts[source_tab] = count
+        skipped_deleted[source_tab] = skipped
 
     if mark_data:
         _retry(

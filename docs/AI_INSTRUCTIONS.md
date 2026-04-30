@@ -28,6 +28,8 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | `add_sent_week_column.py` | ~100 | Pre-flight sanity check for Sent Week col O on cumulative tabs. Reports row counts + blank/sent/malformed state. Safe to re-run. |
 | `.github/workflows/weekly-snapshot.yml` | ~50 | GitHub Actions cron: `0 11 * * 1` (Mon 07:00 ET) + workflow_dispatch. Uses GCP_SA_KEY secret. |
 | `retry_helper.py` | ~120 | Shared retry helper for transient Google API errors. Used by sheets_writer, generate_weekly_snapshot, generate_corrections, and all 4 helper scripts. 5 attempts, exponential backoff (1s/2s/4s/8s/16s), 25% jitter, transient-only catch (HttpError 5xx/429/408 + TimeoutError + socket.timeout + ConnectionError). |
+| `health_report.py` | ~190 | Pipeline health summary script. Queries last N days of GitHub Actions runs via `gh` CLI for both workflow YAMLs. Outputs Markdown with success rate, failure streak, currently-failing count, median duration. Used by the weekly-health-report.yml cron and runnable locally for ad-hoc trend checks. |
+| `.github/workflows/weekly-health-report.yml` | ~50 | Monday 12:00 UTC cron. Runs health_report.py and opens a tracking Issue with the summary, label `health-report`. |
 
 Note: `requirements.txt` now includes `tzdata` for Windows (needed by `zoneinfo.ZoneInfo("America/New_York")`).
 
@@ -203,6 +205,19 @@ Hybrid architecture:
   workflow so they can't both write cumulative tabs at the same time
 - Runtime: ~5-10s typically
 
+### Notification model (v2.5.3+)
+
+| Signal | Where | When |
+|---|---|---|
+| Single workflow failure | (silenced — user mutes default GHA emails) | Per failure |
+| 3+ consecutive failures | GitHub Issue with label `pipeline-failure` | At threshold |
+| Recovery | Comment on the tracking Issue + auto-close | Next success |
+| Weekly trend | GitHub Issue with label `health-report` | Mon 12:00 UTC |
+
+Threshold is configurable via `env: THRESHOLD: '3'` in each workflow's
+smart-notify step. Increase to `5` if you want even less noise; decrease
+to `2` if you want earlier signal.
+
 ## Filtering & Sorting Mechanism
 
 **Dropdowns filter AND sort via SORT(QUERY()) formulas — NOT Apps Script.**
@@ -339,6 +354,46 @@ re-run the entire Python step once if it exits 1, on top of the
 in-script retries. Cron failure mode goes from "miss this hour" to
 "miss this hour AND next hour" — practically never reached.
 
+### 13. Failure-budget mindset & alert hygiene (v2.5.3)
+
+The pipeline runs against Google APIs that have an SLA, not 100% uptime.
+Asking "prevent ALL failures" is the wrong frame — failures will happen;
+the question is whether they cause business impact and whether you hear
+about the right ones.
+
+The defense is layered:
+
+1. **Absorb transient blips silently** (v2.5.2)
+   - 5-attempt exponential retry in-script (~5 min coverage)
+   - GHA workflow-level retry on top (~10 min more)
+   - Total absorbs ~99% of cloud-API hiccups
+
+2. **Only escalate persistent failures** (v2.5.3 smart-notify)
+   - Each workflow's final step counts last-10 consecutive failures
+   - Opens a tracking Issue ONLY at threshold (3 consecutive failures =
+     ~3 hours of real outage for hourly, 3 weeks for weekly)
+   - Auto-closes the Issue on next success
+   - User mutes default workflow-failure emails; subscribes to label
+     `pipeline-failure` for real signal
+
+3. **Trend visibility** (v2.5.3 health-report)
+   - weekly-health-report.yml runs Mon 12:00 UTC, opens Issue with
+     30-day summary (success rate, failure streak, median duration)
+     labeled `health-report`
+   - User scans these weekly to detect slow degradation that wouldn't
+     trigger smart-notify (e.g. success rate drifting from 99.5% → 95%
+     over a month)
+
+4. **State safety** (v2.5.3 row-stamp fix)
+   - Stamping uses student_id lookup re-fetched at stamp time, not
+     stored row numbers from the read pass. Eliminates the v2.5.1-known
+     race window where Apps Script's removeStudentFromCumulativeTabs_
+     could shift rows between snapshot's read and stamp.
+
+What's deliberately NOT done: architectural rebuild (Cloud Scheduler,
+DB-backed state, etc.). Reserved for if the layered defense above is
+insufficient.
+
 ## Common Bugs & Fixes
 
 | Symptom | Cause | Fix |
@@ -367,6 +422,7 @@ in-script retries. Cron failure mode goes from "miss this hour" to
 | `addBanding: You cannot add alternating background colors to a range that already has alternating background colors` | Re-run of `generate_weekly_snapshot.py` same week | `addBanding` isn't idempotent — errors if range already banded | In `main()`, fetch existing bandings via `spreadsheets.get(fields="sheets(properties.sheetId,bandedRanges)")` and queue `deleteBanding` requests BEFORE the new `addBanding` requests in the same batchUpdate. |
 | `deleteSheet: You can't remove all the visible sheets` when 0 unsent rows for the week (deeper issue caught after v2.5.0's `addBanding` fix) | In `generate_weekly_snapshot.py::main()`, old order was: create-file -> read-cumulative -> if all 3 weekly tabs empty, hide all + delete Sheet1 -> Google Sheets rejects (0 visible tabs not allowed) | v2.5.1: restructured to read cumulative tabs FIRST. If `total_rows == 0`, log and exit before any file is created. If a file already exists from a prior run, leave it untouched. |
 | Hourly pipeline crashes during `_ensure_all_tabs` with `HttpError 500 "Internal error encountered"` then `TimeoutError`, exits 1, next hourly run self-recovers | Sustained transient Sheets API hiccup (~3+ min). The old `_retry_api` had only 3 attempts × linear backoff (5s, 10s) = ~2 min coverage; outage outlasted the retry budget | v2.5.2: Replaced with shared `retry_helper.retry_api` — 5 attempts × exponential backoff with jitter (~5 min coverage), transient-only catch. Plus GHA `nick-fields/retry@v3` workflow-level retry as belt-and-suspenders. |
+| Sent Week stamps land on wrong row in cumulative tab (rare; only when Apps Script edits the same tab during a snapshot run) | `generate_weekly_snapshot.py` stamped by row number stored at read time; Apps Script's `removeStudentFromCumulativeTabs_` could shift rows between read (~T) and stamp (~T+5s) | v2.5.3: stamp by student_id lookup re-fetched immediately before stamping. Re-read of col M is wrapped in `_retry`. Rows that vanished between read and stamp are silently skipped. |
 
 ## Known Limitations
 

@@ -6,6 +6,11 @@ on:
     - cron: "0 * * * *"
   workflow_dispatch: {}  # allow manual triggering from Actions tab
 
+permissions:
+  contents: read
+  issues: write    # for smart-notify step (open/close/comment on tracking issue)
+  actions: read    # for smart-notify step (count consecutive failures)
+
 concurrency:
   group: weekly-corrections-pipeline
   cancel-in-progress: false  # let a running pipeline finish; queue the next
@@ -50,3 +55,91 @@ jobs:
       - name: Clean up credentials
         if: always()
         run: rm -f keys/sa-main.json
+
+      # v2.5.3: smart-notify — only escalate on persistent failures.
+      # Counts consecutive failures of THIS workflow; opens (or comments on)
+      # a tracking Issue once threshold is hit. Auto-closes on next success.
+      # Mute the default "Actions failure" email and subscribe to issues
+      # with label `pipeline-failure` instead.
+      - name: Smart-notify on persistent failure
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          THRESHOLD: '3'   # consecutive failures before opening tracking issue
+        with:
+          script: |
+            const jobFailed = '${{ job.status }}' !== 'success';
+            const workflowName = context.workflow;
+            const issueTitle = `🚨 ${workflowName} persistently failing`;
+            const label = 'pipeline-failure';
+
+            // Find existing open tracking issue for this workflow
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+              per_page: 100,
+            });
+            const existing = issues.data.find(i => i.title === issueTitle);
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            if (jobFailed) {
+              // Get this run's workflow_id, then count consecutive failures
+              const currentRun = await github.rest.actions.getWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId,
+              });
+              const runs = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: currentRun.data.workflow_id,
+                per_page: 10,
+              });
+              let consecutive = 0;
+              for (const r of runs.data.workflow_runs) {
+                if (r.conclusion === 'failure') consecutive++;
+                else if (r.conclusion === 'success') break;
+                // ignore cancelled/skipped/null
+              }
+              const threshold = parseInt(process.env.THRESHOLD, 10);
+              console.log(`Failure detected. Consecutive failures: ${consecutive}. Threshold: ${threshold}.`);
+
+              if (consecutive >= threshold) {
+                if (existing) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: existing.number,
+                    body: `Still failing. Consecutive failures: **${consecutive}**.\nLatest run: ${runUrl}`,
+                  });
+                  console.log(`Commented on issue #${existing.number}`);
+                } else {
+                  const created = await github.rest.issues.create({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    title: issueTitle,
+                    body: `**${workflowName}** has failed ${consecutive} times consecutively.\n\nLatest run: ${runUrl}\n\nThis issue auto-closes when the next run succeeds. If it persists, investigate the run log.`,
+                    labels: [label],
+                  });
+                  console.log(`Opened issue #${created.data.number}: ${created.data.html_url}`);
+                }
+              } else {
+                console.log(`Below threshold; no notification.`);
+              }
+            } else if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `✅ Pipeline recovered. Auto-closing this tracking issue.\nRun: ${runUrl}`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                state: 'closed',
+              });
+              console.log(`Closed recovered issue #${existing.number}`);
+            }
