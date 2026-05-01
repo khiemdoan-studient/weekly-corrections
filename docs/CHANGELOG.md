@@ -1,5 +1,64 @@
 # Changelog
 
+## [v2.6.0] - 2026-04-30
+
+### Added
+- **`Code.js`** at repo root. Replaces `apps_script/Code.gs`. Same functional content as v2.4.3 (verified by `clasp pull` diff: only the header comment differs). Header updated to v2.6.0 with deploy instructions.
+- **`appsscript.json`**. clasp manifest. `timeZone: America/New_York`, `runtimeVersion: V8`, `exceptionLogging: STACKDRIVER`.
+- **`.claspignore`**. Whitelist strategy: ignore everything by default, only push `Code.js` + `appsscript.json` to Apps Script. Prevents accidentally pushing Python tooling, docs, GHA workflows, or `.claude/` config to the production Apps Script project.
+- **`package.json`**. npm scripts:
+  - `npm run check`: `node --check Code.js` syntax gate.
+  - `npm run deploy`: check + `clasp push`.
+  - `npm run pull` / `push` / `open`: raw clasp passthroughs.
+- **`.github/workflows/deploy-apps-script.yml`**. Auto-deploy on push to main when `Code.js`, `appsscript.json`, or `.claspignore` change. Also `workflow_dispatch` for manual runs. Fail-soft when secrets missing (logs warning, skips silently).
+
+### Removed
+- **`apps_script/Code.gs`**. Old location. Migrated to root `Code.js`. `apps_script/` directory deleted.
+
+### Changed
+- **`.gitignore`**. Added `.clasp.json` (gitignored, contains scriptId per user), un-excluded `appsscript.json` from the `*.json` rule, added `node_modules/`.
+
+### Why
+Eliminates the manual "paste Code.gs into Extensions > Apps Script" step that's caused recurring confusion since v2.4.3. The live Apps Script in the corrections spreadsheet now ALWAYS matches HEAD on main. No more "did I remember to re-paste?" anxiety.
+
+### Architecture: how auto-deploy works
+Two paths, both supported:
+1. **Local CLI** (matches the email-automation pattern): developer runs `npm run deploy` from project root. Runs `node --check Code.js` for syntax, then `clasp push` to upload to the linked Apps Script project. Requires `clasp login` once per machine and `.clasp.json` with the scriptId.
+2. **GHA auto-deploy on push**: any commit to main that touches `Code.js`, `appsscript.json`, or `.claspignore` triggers `.github/workflows/deploy-apps-script.yml`, which installs clasp, restores credentials from `CLASPRC_JSON` + `CLASP_SCRIPT_ID` secrets, runs `clasp push --force`. Truly hands-free if secrets configured.
+
+### Verified
+- `clasp pull` from live, diffed against repo `Code.js`. Only the header comment differed (live had v2.4.3 header text, repo has v2.6.0). **Functional code is identical**. Confirms the live Apps Script was NOT stale on logic, only on the header comment.
+- `clasp push --force` succeeded: `Pushed 2 files at 4:19:53 PM`. Live Apps Script now matches repo HEAD.
+- `node --check Code.js` syntax check passes.
+- Local clasp 3.3.0 installed; `~/.clasprc.json` present with `tokens` schema.
+
+### Investigation: original "Accept doesn't route" symptom (separate from auto-deploy)
+User reported on 2026-04-30: "I checked Accept, nothing went into Correction List, and after an hour the checkbox was unchecked." Same for Unenrolling.
+
+What we found during diagnosis:
+- Apps Script `onEdit` IS firing (5/1 rows present in `_ApprovedData` and `_UnenrollData`).
+- Routing works correctly (Unenrolling -> `_UnenrollData`, Roster Addition -> `_AdditionsData`, else -> `_ApprovedData`).
+- v2.4.4 `read_handled_student_ids` returns the expected recent sids; `_hide_recently_handled` filters them out.
+- Live `Code.js` diff vs repo `Code.js`: only header text differs; logic identical.
+
+Therefore the symptom is NOT a stale-code issue. Likely candidates:
+1. **Sheet 3 dropdown filter set**: if Campus dropdown on "Automated Correction List" is set to a specific campus, rows for other campuses are invisible despite being in `_ApprovedData`.
+2. **Visual position shift**: after pipeline rebuild, a different student now occupies the same visual row as where the user clicked Accept; the new student's checkbox appears unchecked, looking like "your" Accept reverted.
+3. **Race**: user clicks Accept right before the hourly cron runs; pipeline reads cumulative tabs before the append finishes. Probability narrow (~5 min window).
+
+v2.6.0 doesn't directly fix any of these. It ensures future fixes can be deployed without manual paste, eliminating that whole class of "did I update the script?" failure mode.
+
+### User Action Required
+**For the GHA auto-deploy to start working** (one-time setup):
+1. Go to GitHub repo Settings -> Secrets and variables -> Actions -> New repository secret.
+2. Add secret `CLASPRC_JSON`: paste the full contents of your local `~/.clasprc.json` (or `%USERPROFILE%\.clasprc.json` on Windows). This is your clasp OAuth refresh token.
+3. Add secret `CLASP_SCRIPT_ID`: paste `16_ypoWiIFRpIZzUEpwJGLP8DvexGoCDAiXaZGKoIhRQFa38H8vcS436_` (the Apps Script project ID for the corrections spreadsheet).
+4. After both secrets are set, the next push to `Code.js` auto-deploys. Or trigger manually: Actions tab -> "Auto-deploy Apps Script (clasp)" -> Run workflow.
+
+Until secrets are added, `npm run deploy` from local works (and was used to deploy v2.6.0 itself).
+
+The `CLASPRC_JSON` contains an OAuth refresh token. Treat it as a credential. Only add to GitHub Actions secrets, never commit to the repo (already gitignored via `*.json`).
+
 ## [v2.5.3] — 2026-04-30
 
 ### Added

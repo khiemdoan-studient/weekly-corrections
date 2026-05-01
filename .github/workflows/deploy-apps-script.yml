@@ -1,0 +1,94 @@
+name: Auto-deploy Apps Script (clasp)
+
+# v2.6.0: every push to main that touches Code.js or appsscript.json
+# auto-deploys to the corrections spreadsheet's bound Apps Script project.
+# No more manual paste step. Live Apps Script === HEAD on main.
+#
+# One-time setup before this can run:
+#   1. clasp login locally to create ~/.clasprc.json
+#   2. Add the FULL CONTENTS of ~/.clasprc.json as GHA secret CLASPRC_JSON
+#   3. Add the scriptId as GHA secret CLASP_SCRIPT_ID
+#      (find scriptId in https://script.google.com/d/<ID>/edit URL of the
+#       Apps Script bound to the corrections spreadsheet)
+#
+# Manual trigger: Actions tab -> "Auto-deploy Apps Script (clasp)" -> Run workflow
+# Failures bubble up to the smart-notify pattern as a workflow failure.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Code.js'
+      - 'appsscript.json'
+      - '.claspignore'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  # Don't overlap with itself; cancel in-progress is fine — latest wins
+  group: clasp-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install clasp (matches local 3.x; uses ~/.clasprc.json `tokens` schema)
+        run: npm install -g '@google/clasp@^3.3'
+
+      - name: Syntax check Code.js
+        run: node --check Code.js
+
+      - name: Check secrets configured
+        id: secrets
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          CLASP_SCRIPT_ID: ${{ secrets.CLASP_SCRIPT_ID }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ] || [ -z "$CLASP_SCRIPT_ID" ]; then
+            echo "::warning::CLASPRC_JSON or CLASP_SCRIPT_ID secret not configured. Auto-deploy is skipped this run. See README section 'Apps Script auto-deploy setup' to enable."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore clasp credentials
+        if: steps.secrets.outputs.configured == 'true'
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          CLASP_SCRIPT_ID: ${{ secrets.CLASP_SCRIPT_ID }}
+        run: |
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          printf '{"scriptId":"%s","rootDir":"."}' "$CLASP_SCRIPT_ID" > .clasp.json
+          # Sanity check that ~/.clasprc.json is valid JSON
+          node -e "JSON.parse(require('fs').readFileSync(process.env.HOME + '/.clasprc.json', 'utf8'))"
+
+      - name: Push to Apps Script
+        if: steps.secrets.outputs.configured == 'true'
+        run: clasp push --force
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.secrets.outputs.configured }}" = "true" ]; then
+            echo "::notice::Apps Script deployed via clasp push to scriptId ${{ secrets.CLASP_SCRIPT_ID }}"
+          else
+            echo "::notice::Auto-deploy SKIPPED. To enable: add CLASPRC_JSON + CLASP_SCRIPT_ID secrets, then re-trigger via Actions tab."
+          fi
+
+      - name: Clean up credentials
+        if: always()
+        run: |
+          rm -f "$HOME/.clasprc.json" .clasp.json

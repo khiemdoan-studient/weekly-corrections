@@ -1,9 +1,18 @@
 /**
- * Automated Weekly Corrections — Apps Script (v2.4.3)
+ * Automated Weekly Corrections — Apps Script (v2.6.0)
+ *
+ * Source of truth: this file in the repo. Deployed to the Apps Script
+ * project bound to the corrections spreadsheet via clasp:
+ *
+ *   npm run deploy   # local: runs node --check Code.js && clasp push
+ *
+ * GHA also auto-deploys on every push to main that touches Code.js or
+ * appsscript.json (.github/workflows/deploy-apps-script.yml). The live
+ * Apps Script ALWAYS matches HEAD on main — no manual paste step.
  *
  * This file combines two features that share the same Apps Script project.
  * Each feature activates only when its relevant sheet tab is present, so
- * pasting this into either the Weekly Corrections spreadsheet OR any ISR
+ * pushing this into either the Weekly Corrections spreadsheet OR any ISR
  * (which has Student Cards) is safe.
  *
  * FEATURE 1: Accept/Reject checkbox handler (onEdit)
@@ -18,8 +27,6 @@
  * FEATURE 2: Student Cards generator (onOpen menu)
  *   - Active only when current sheet has a "Copy of MAP Roster" tab (i.e. ISRs)
  *   - Adds "Student Cards" menu → generates Letter portrait PDF cards
- *
- * Installation: Extensions > Apps Script > paste this whole file > Save
  */
 
 // ═════════════════════════════════════════════════════════════════════════

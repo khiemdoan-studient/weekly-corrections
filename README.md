@@ -35,7 +35,7 @@ MAP Roster (Google Sheet)          BigQuery (alpha_roster)
 - Service account key at `keys/sa-main.json`
 - MAP roster shared with SA as Viewer
 - Output sheet shared with SA as Editor
-- `apps_script/Code.gs` pasted into Extensions > Apps Script (one-time setup)
+- `Code.js` deployed to the corrections spreadsheet's Apps Script project. Use `npm run deploy` locally, or rely on the GHA auto-deploy workflow (see "Apps Script Auto-Deploy" below).
 
 ### Install & Run
 ```bash
@@ -54,7 +54,8 @@ The `alpha_roster` BQ table must exist. It is created by step 11b of `Refresh-Da
 | `config.py` | Constants: sheet IDs, BQ config, header mappings, campus list, tab names |
 | `queries.py` | BigQuery query for alpha_roster table (includes admissionstatus) |
 | `sheets_writer.py` | Google Sheets API: tabs, QUERY formulas, format, migration, backfill |
-| `apps_script/Code.gs` | Apps Script onEdit: accept/reject routing by mismatch type |
+| `Code.js` | Apps Script onEdit: accept/reject routing by mismatch type. Auto-deployed via clasp (see "Apps Script Auto-Deploy"). |
+| `appsscript.json` | Apps Script manifest (TZ + V8 runtime), pushed alongside Code.js. |
 | `write_user_guide.py` | Generates the User Guide Google Doc (linked from every sheet) |
 | `run_export.ps1` | One-time script to create alpha_roster BQ table |
 | `alpha_roster_ctas.sql` | Athena CTAS query for alpha_roster export (deduped) |
@@ -94,6 +95,45 @@ The `alpha_roster` BQ table must exist. It is created by step 11b of `Refresh-Da
 5. Data team processes approval sheets every Friday
 
 See `docs/AI_INSTRUCTIONS.md` for architecture details and `docs/HUMAN_INSTRUCTIONS.md` for user-facing workflow.
+
+## Apps Script Auto-Deploy
+
+`Code.js` (the Apps Script for the corrections spreadsheet) is auto-deployed
+via [clasp](https://github.com/google/clasp). No manual copy-paste step.
+
+### Per-edit workflow (local)
+
+```bash
+npm run deploy
+```
+
+Runs `node --check Code.js` (syntax) then `clasp push` to deploy to the
+linked Apps Script project. Reload the corrections spreadsheet to use the
+new code.
+
+### One-time setup (for GHA auto-deploy on git push)
+
+GitHub Actions auto-deploys on every push to main that touches `Code.js`,
+`appsscript.json`, or `.claspignore`. Requires two secrets:
+
+1. **CLASPRC_JSON**: contents of your local `~/.clasprc.json` (or `%USERPROFILE%\.clasprc.json` on Windows). Generated when you run `clasp login`.
+2. **CLASP_SCRIPT_ID**: the Apps Script project ID for the corrections spreadsheet
+   (currently `16_ypoWiIFRpIZzUEpwJGLP8DvexGoCDAiXaZGKoIhRQFa38H8vcS436_`).
+
+Add both via GitHub repo → Settings → Secrets and variables → Actions → New repository secret.
+
+Until secrets are configured, the workflow runs but skips deploy with a warning. You can still use `npm run deploy` locally.
+
+### Files involved
+
+| File | Purpose |
+|---|---|
+| `Code.js` | Apps Script source (deployed) |
+| `appsscript.json` | Apps Script manifest (TZ, runtime) |
+| `.claspignore` | Whitelist: only Code.js + appsscript.json get pushed |
+| `.clasp.json` | Local-only (gitignored) — contains scriptId of bound Apps Script |
+| `package.json` | npm scripts: deploy, push, pull, open |
+| `.github/workflows/deploy-apps-script.yml` | GHA auto-deploy workflow |
 
 ## Pipeline Health & Monitoring
 

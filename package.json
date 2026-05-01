@@ -1,0 +1,16 @@
+{
+  "name": "weekly-corrections-apps-script",
+  "version": "2.6.0",
+  "description": "Apps Script for the corrections spreadsheet (auto-deployed via clasp).",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "check": "node --check Code.js",
+    "pull": "clasp pull",
+    "push": "clasp push",
+    "open": "clasp open",
+    "deploy": "npm run check && clasp push && echo 'Deployed. Reload the corrections spreadsheet to use the new Apps Script.'"
+  }
+}

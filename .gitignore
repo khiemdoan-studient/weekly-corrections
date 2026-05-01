@@ -1,7 +1,14 @@
 # Secrets & credentials
 keys/
+# .clasp.json contains scriptId of the bound Apps Script project (per-user)
+.clasp.json
 *.json
 !package.json
+# appsscript.json is the clasp manifest and must be tracked
+!appsscript.json
+
+# Node (clasp deploy dependency)
+node_modules/
 
 # Python
 __pycache__/

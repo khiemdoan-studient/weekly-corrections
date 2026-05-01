@@ -1,0 +1,20 @@
+# .claspignore — controls which files get pushed to the Apps Script project.
+# Pattern: glob-style (.gitignore-like). Lines beginning with "!" are NEGATIONS
+# (files to INCLUDE despite a broader exclusion).
+#
+# Strategy: WHITELIST. Ignore everything by default; explicitly include only
+# the two files Apps Script actually needs (manifest + main script). Prevents
+# accidentally shipping Python tooling (generate_corrections.py, etc.), docs,
+# build files, or .claude/ config to the production Apps Script project.
+#
+# Add new files here only if they belong in the Apps Script editor:
+# - .gs / .js → Apps Script source files
+# - .html    → HtmlService templates (we don't have any yet)
+# - appsscript.json → manifest (already whitelisted)
+
+# Default: ignore everything
+**/*
+
+# Whitelist: only push these to Apps Script
+!appsscript.json
+!Code.js

@@ -135,24 +135,24 @@ If you're an Implementation Manager (IM) and a student needs to be unenrolled, y
 
 ## How to Install Apps Script
 
-The accept/reject workflow requires a one-time Apps Script setup:
+**Apps Script is auto-deployed.** Don't paste it manually. Either run `npm run deploy` locally, or push to main (GitHub Actions deploys automatically). The live Apps Script always matches the latest committed `Code.js`.
 
-1. Open the Automated Weekly Corrections spreadsheet
-2. Go to **Extensions > Apps Script**
-3. Delete any existing code in the editor
-4. Copy the contents of `apps_script/Code.gs` and paste it in
-5. Press **Ctrl+S** to save
-6. Close the Apps Script editor — no deployment needed, `onEdit` triggers run automatically
+### Apps Script auto-deploy setup (one-time, ~5 min)
 
-**Important:** After any code update (e.g., new version with accept/reject columns), repeat steps 2-5 to paste the latest `Code.gs`.
+The clasp infrastructure is in the repo, but two GitHub secrets are needed to enable the GHA workflow:
 
-**v2.4.2 update (race-condition fix)**: If you're upgrading from an earlier
-version, you need to re-paste `apps_script/Code.gs` once more. Older versions
-had a rare but real race where clicking multiple Accept/Reject checkboxes
-within a second could leave some rows with an inconsistent date format
-(like `4/23/2026 1:37:44` instead of `2026-04-23 01:37:44`), breaking the
-"Date Approved" chronological sort. The fix pre-formats the timestamp before
-writing the row, eliminating the race.
+1. **CLASPRC_JSON**: your clasp OAuth refresh token. Get from your local `~/.clasprc.json` (or `%USERPROFILE%\.clasprc.json` on Windows). Copy the full file contents.
+2. **CLASP_SCRIPT_ID**: the Apps Script project ID. Currently `16_ypoWiIFRpIZzUEpwJGLP8DvexGoCDAiXaZGKoIhRQFa38H8vcS436_`.
+
+To add:
+1. GitHub repo → Settings → Secrets and variables → Actions → New repository secret
+2. Add CLASPRC_JSON and CLASP_SCRIPT_ID separately
+
+After both are set, every push to `Code.js` auto-deploys. Until they're set, the workflow logs a warning and skips deploy silently. You can still deploy manually via `npm run deploy`.
+
+To trigger manually: Actions tab → "Auto-deploy Apps Script (clasp)" → Run workflow.
+
+**v2.4.2 update (race-condition fix)**: Older versions had a rare but real race where clicking multiple Accept/Reject checkboxes within a second could leave some rows with an inconsistent date format (like `4/23/2026 1:37:44` instead of `2026-04-23 01:37:44`), breaking the "Date Approved" chronological sort. The fix pre-formats the timestamp before writing the row, eliminating the race. The auto-deploy now keeps this fix live without manual intervention.
 
 ## Spreadsheet Sheets
 
@@ -232,7 +232,7 @@ If you ever need to RE-send a row in a later week (rare): manually clear col O o
 | "The caller does not have permission" | Share the spreadsheet with the service account email |
 | Campus shows 0 enrolled students | Check the Notes column header in the MAP roster — it must match one of the entries in `MAP_HEADER_MAP["notes"]` |
 | "Table alpha_roster was not found" | Run `run_export.ps1` or the full dashboard pipeline to create the BQ table |
-| Checkbox doesn't route to approval sheet | Install/re-install the Apps Script (see above) |
+| Checkbox doesn't route to approval sheet | Verify the auto-deploy worked. Check GitHub Actions tab for "Auto-deploy Apps Script (clasp)" or run `npm run deploy` locally. |
 | "addBanding" error | Auto-handled on re-runs; the script clears existing banding first |
 | "mergeCells" error | Auto-handled on re-runs; the script unmerges all cells before formatting |
 | Checkboxes disappeared after changing a filter | Expected behavior — checkboxes reset when filters change because the visible rows shift |
@@ -241,12 +241,15 @@ If you ever need to RE-send a row in a later week (rare): manually clear col O o
 | Unenroll Queue (Live) shows #REF! or is empty | This is a one-time auth prompt from IMPORTRANGE. Click 'Allow access' when you see the pop-up in the sheet — the data will populate within seconds. |
 | Hourly pipeline hasn't run when expected | Check https://github.com/khiemdoan-studient/weekly-corrections/actions for any failed runs. Click 'Re-run all jobs' on a failed workflow or ask Khiem. |
 | GitHub Actions email says a workflow failed, but the next hourly run succeeded | Almost certainly a transient Google Sheets API hiccup. The workflow now retries 5 times in-script with exponential backoff, AND the GHA workflow itself retries the whole Python step once if it exits 1. So a single failure email usually means the API was actually hiccuping for >5 minutes. Check the run log: if you see "[retry] attempt N/5 failed (HttpError 5xx)" lines and then a later run succeeded, it self-recovered. No action needed. |
-| Date column in approval sheets has mixed formats (`4/23/2026` mixed with `2026-04-23`) | Older Code.gs race condition. Run `python normalize_dates.py` once to fix historical rows, then re-paste the current `apps_script/Code.gs` to prevent future drift. |
+| Date column in approval sheets has mixed formats (`4/23/2026` mixed with `2026-04-23`) | Older Code.js race condition. Run `python normalize_dates.py` once to fix historical rows. The current `Code.js` is auto-deployed, so future drift is already prevented. |
 | A student I accepted/rejected last week is back on Sheet 1 | Expected behavior — the 7-day hide window expired. It means the data team hasn't processed the correction yet. Re-check your box to re-hide, or ping Khiem. |
-| My Accept (col A) / Reject (col B) columns are white/grey instead of green/red | You're probably running an older Apps Script. Re-paste the current `apps_script/Code.gs` from the repo into Extensions > Apps Script. The v2.4.3+ version only modifies cols C–O on checkbox click, so cols A/B keep their permanent green/red column colors. |
+| My Accept (col A) / Reject (col B) columns are white/grey instead of green/red | You're probably running an older Apps Script. Run `npm run deploy` locally OR push to main to trigger the auto-deploy workflow. The v2.4.3+ version only modifies cols C-O on checkbox click, so cols A/B keep their permanent green/red column colors. |
 | The weekly sheet didn't generate this Monday | Check GitHub Actions. Go to https://github.com/khiemdoan-studient/weekly-corrections/actions — look for the "Weekly snapshot (Monday)" workflow. If it shows failed/skipped, click it to see logs. To re-run manually: click the Run workflow button on the right. |
 | "It's Monday and there's no new file in the Shared Drive" | Either (a) no IMs accepted any corrections during the past week, so the snapshot script intentionally skipped file creation — check Actions log for "No corrections to send this week", or (b) the workflow failed — open the most recent run at https://github.com/khiemdoan-studient/weekly-corrections/actions/workflows/weekly-snapshot.yml and read the error. To force a file even when there are no unsent rows: clear col O on a row in the hidden `_ApprovedData` / `_AdditionsData` / `_UnenrollData` tab, then click "Run workflow" on the Actions page. |
 | I see '4/20 Corrections' but it shows last week's data | Expected IF no new corrections were accepted this week. The snapshot includes rows stamped with THIS Monday's date plus any unsent rows. If the data team hasn't processed last week's corrections AND no new ones were accepted, the file stays showing those. Once new rows are accepted, re-trigger the workflow to refresh. |
 | I manually created a sheet in the Shared Drive but the script made a separate one | The script matches exactly by filename `M/D Corrections` (e.g. `4/20 Corrections`). If you made something differently named, the script creates a fresh one alongside. Rename your file or delete one of them. |
 | I want to see the pipeline's recent run history at a glance | Run `python health_report.py --days 30` from the repo root. Or look at https://github.com/khiemdoan-studient/weekly-corrections/issues?q=label%3Ahealth-report for the auto-generated weekly summaries. |
 | There's an open issue with label `pipeline-failure` and I want to know which workflow is broken | The issue title contains the workflow name (e.g. "🚨 Hourly corrections pipeline persistently failing"). The body links to the most recent failed run. Click that link to see the error. |
+| I checked Accept but nothing went into Correction List | Most likely: Sheet 3 has a Campus dropdown filter set, and your accepted row's campus doesn't match. The row IS in the cumulative tab, just invisible due to filter. Check the underlying `_ApprovedData` tab via Apps Script editor → File → all tabs (it's hidden). Set Sheet 3's Campus dropdown to "All" and your row will appear. |
+| Accept checkbox unchecked itself after an hour | The hourly pipeline rebuilds Sheet 1 from MAP-vs-SIS comparison and resets all checkboxes via setDataValidation. The student should be hidden by v2.4.4 logic if their accept timestamp is < 7 days old. If you see them appear with unchecked checkbox, possible: (a) timestamp parsing failed, (b) different student now occupies that visual row position. Look at the actual student name/ID in the row. It may be a *different* student than the one you accepted. Your accepted student is hidden from Sheet 1 for 7 days. |
+| Code.js change didn't take effect | Either you didn't run `npm run deploy`, or GHA deploy failed. (a) Run `npm run deploy` locally, OR (b) check GitHub Actions tab for "Auto-deploy Apps Script (clasp)" workflow status. If skipped due to missing secrets, set them up per "Apps Script auto-deploy setup" section. |

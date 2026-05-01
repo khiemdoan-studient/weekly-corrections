@@ -16,7 +16,11 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | `config.py` | ~90 | Constants, header mappings, campus list, sheet IDs |
 | `queries.py` | ~30 | Single BQ query function for alpha_roster |
 | `sheets_writer.py` | ~850 | Sheets API: hidden tabs, QUERY formulas, title/caption, filters, format |
-| `apps_script/Code.gs` | ~105 | Apps Script onEdit: accept/reject checkboxes → route by type, clear on filter change |
+| `Code.js` | ~370 | Apps Script source at repo root: onEdit accept/reject routing, clear on filter change. Auto-deployed via clasp (was `apps_script/Code.gs` pre-v2.6.0). |
+| `appsscript.json` | ~7 | Apps Script manifest (TZ America/New_York, V8 runtime). Pushed alongside Code.js by clasp. |
+| `.claspignore` | ~22 | clasp whitelist: ignores everything by default, only Code.js + appsscript.json get pushed. Prevents accidental push of Python tooling, docs, or `.claude/` config. |
+| `package.json` | ~16 | npm deploy scripts: `npm run deploy` runs `node --check Code.js` + `clasp push`. Also exposes `pull`, `push`, `open`. |
+| `.github/workflows/deploy-apps-script.yml` | ~80 | GHA auto-deploy on push to main when Code.js / appsscript.json / .claspignore changes. Fail-soft: logs warning + skips when CLASPRC_JSON / CLASP_SCRIPT_ID secrets aren't configured. |
 | `write_user_guide.py` | ~215 | Google Docs API: write formatted user guide |
 | `run_export.ps1` | ~70 | One-time: Athena CTAS → S3 → GCS → BQ for alpha_roster |
 | `alpha_roster_ctas.sql` | ~30 | Athena SQL with dedup, handles reserved word "group" |
@@ -213,6 +217,7 @@ Hybrid architecture:
 | 3+ consecutive failures | GitHub Issue with label `pipeline-failure` | At threshold |
 | Recovery | Comment on the tracking Issue + auto-close | Next success |
 | Weekly trend | GitHub Issue with label `health-report` | Mon 12:00 UTC |
+| Auto-deploy success/failure | Standard GHA notifications | Per push or workflow_dispatch |
 
 Threshold is configurable via `env: THRESHOLD: '3'` in each workflow's
 smart-notify step. Increase to `5` if you want even less noise; decrease
@@ -329,7 +334,7 @@ outages get longer:
 6. **Batched API pre-writes** — Tab existence (1 read + 1 batch create), unmergeCells (1 batched call for all 6 sheets), clear values (`batchClear` for 9 tabs). ~5 pre-write API calls total instead of ~28.
 7. **Three-level unenroll chain** — IM checks SR checkbox → formula mirrors to MR → IMPORTRANGE pushes to CMR → pipeline reads CMR Unenroll via `MAP_HEADER_MAP` auto-detection. No Apps Script needed.
 8. **Hybrid real-time + hourly architecture** — Sheets-only live queue for instant IM feedback (bypass BQ); full pipeline on GitHub Actions hourly schedule for SIS comparison. No pure-Sheets solution exists because Sheets can't query BigQuery.
-9. **Pre-formatted ISO date strings in Code.gs** — Instead of `appendRow([new Date(), ...])` + post-write `setNumberFormat`, we pre-compute the date string via `Utilities.formatDate` and append the raw string. This is race-safe under concurrent onEdit triggers (Apps Script can fire multiple concurrent instances when a user toggles multiple checkboxes quickly). onEdit triggers are simple triggers (not installable), fire synchronously per edit, but Google may invoke multiple in parallel when edits happen within milliseconds. Trade-off: the column now stores strings, not serial dates, so numeric date sort relies on the ISO format being lexicographically equivalent to chronological order (it is).
+9. **Pre-formatted ISO date strings in Code.js** — Instead of `appendRow([new Date(), ...])` + post-write `setNumberFormat`, we pre-compute the date string via `Utilities.formatDate` and append the raw string. This is race-safe under concurrent onEdit triggers (Apps Script can fire multiple concurrent instances when a user toggles multiple checkboxes quickly). onEdit triggers are simple triggers (not installable), fire synchronously per edit, but Google may invoke multiple in parallel when edits happen within milliseconds. Trade-off: the column now stores strings, not serial dates, so numeric date sort relies on the ISO format being lexicographically equivalent to chronological order (it is).
 10. **Hide accepted/rejected rows for 7 days** — Previously, Sheet 1 always showed every current mismatch, including students who had already been Accept'd or Reject'd. After handling, the pipeline rebuild cleared the checkbox but re-pulled the student, which confused IMs ("I already checked this, why is it back?"). v2.4.4 filters out students handled within `HIDE_HANDLED_DAYS`. After the window, if the mismatch still exists, the student reappears — which signals that the data team hasn't processed the correction yet. This behavior aligned with user expectation even though no prior version had implemented it.
 11. **Shared Drive for weekly snapshot** — Service accounts have 0 bytes of Drive quota by default. Files created by the SA in its own Drive fail with `storageQuotaExceeded` (HTTP 403). Solution: Shared Drive hosts the weekly files — files there are owned by the drive itself, bypassing user quotas. All Drive API calls that touch the Shared Drive must include `supportsAllDrives=True`; `files.list` additionally needs `driveId=<shared_drive_id>`, `corpora='drive'`, `includeItemsFromAllDrives=True`.
 
@@ -394,6 +399,40 @@ What's deliberately NOT done: architectural rebuild (Cloud Scheduler,
 DB-backed state, etc.). Reserved for if the layered defense above is
 insufficient.
 
+### 14. Apps Script as code (v2.6.0)
+
+Before v2.6.0, Apps Script changes required manual copy-paste of `apps_script/Code.gs`
+into the Extensions > Apps Script editor in the corrections spreadsheet. This created
+a recurring failure mode: every release that touched Apps Script (v2.4.3, v2.4.4,
+v2.5.x) had "user must re-paste Code.gs" as an outstanding action item. Skipping the
+paste meant the live spreadsheet ran old script logic while the repo had newer logic.
+
+v2.6.0 eliminates the paste step:
+
+- Source of truth: `Code.js` at repo root (was `apps_script/Code.gs`).
+- Deploy mechanism: clasp (Google's Apps Script CLI).
+- Two deploy paths:
+  1. Local: `npm run deploy` from project root → runs `node --check Code.js` then `clasp push`.
+  2. GHA: `.github/workflows/deploy-apps-script.yml` triggers on push to main when
+     `Code.js`, `appsscript.json`, or `.claspignore` changes. Uses `CLASPRC_JSON` +
+     `CLASP_SCRIPT_ID` secrets. Fail-soft when secrets not configured (logs warning,
+     skips silently — no email noise).
+- Live Apps Script === HEAD on main, always (after secrets configured).
+
+Pattern modeled after the email-automation project (which uses identical layout:
+Code.js + appsscript.json + .claspignore + package.json with `npm run deploy`).
+
+Architectural notes:
+- Service account cannot deploy via clasp (clasp uses OAuth refresh tokens, not SA JWT).
+  GHA uses USER OAuth tokens stored as the CLASPRC_JSON secret.
+- The 9 ISR spreadsheets each have their own Apps Script project (Student Cards
+  generator). v2.6.0 only auto-deploys to the corrections spreadsheet's project.
+  ISRs still rely on manual paste — Code.js is polymorphic (checks for "Copy of MAP
+  Roster" tab to gate Student Cards features), so it CAN be pasted into ISRs too,
+  just not auto-deployed there.
+- The fail-soft secrets check means committing v2.6.0 without secrets configured
+  still pushes cleanly — the deploy workflow logs a warning instead of erroring.
+
 ## Common Bugs & Fixes
 
 | Symptom | Cause | Fix |
@@ -415,14 +454,15 @@ insufficient.
 | QUERY `WHERE UPPER(col) = 'TRUE'` returns #VALUE! | Boolean values stored as Google Sheets booleans (not strings). UPPER() expects string input. | Use `WHERE col = TRUE` (no UPPER, no quotes) |
 | Pipeline silently misses CMR Unenroll column | Default `A1:AC` range stopped at col 29 (AC). Unenroll is at col AD (29) for 7 campuses. | Expanded to `A1:AE` in `read_map_roster` |
 | Live Queue shows `#REF!` or empty | IMPORTRANGE needs one-time human auth in the destination spreadsheet | User opens the tab and clicks 'Allow access' on the prompt |
-| Inconsistent date formats in cumulative tabs | Apps Script race: `setNumberFormat(getLastRow(), 1)` fired by concurrent onEdit triggers applies to wrong row, leaving some rows in locale default (`4/23/2026 1:37:44`) and others in ISO (`2026-04-23 01:37:44`). Breaks chronological sort. | Code.gs now pre-formats the date as ISO string via `Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss")` BEFORE appendRow, eliminating the race. For historical data: `normalize_dates.py` migrates existing rows. |
-| Accept/Reject col A/B colors missing after checkbox click | Pre-v2.4.3 Code.gs called `setBackground(null)` on cols 1–15, wiping the permanent `#D4EDDA` / `#FEE2E2` applied by `sheets_writer.py`. Pipeline run re-applies them, but Apps Script wipes them again on next click. | Re-paste v2.4.3+ Code.gs — it only touches cols 3–15 (C:O), leaving A/B untouched. |
+| Inconsistent date formats in cumulative tabs | Apps Script race: `setNumberFormat(getLastRow(), 1)` fired by concurrent onEdit triggers applies to wrong row, leaving some rows in locale default (`4/23/2026 1:37:44`) and others in ISO (`2026-04-23 01:37:44`). Breaks chronological sort. | `Code.js` now pre-formats the date as ISO string via `Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss")` BEFORE appendRow, eliminating the race. For historical data: `normalize_dates.py` migrates existing rows. |
+| Accept/Reject col A/B colors missing after checkbox click | Pre-v2.4.3 `Code.js` called `setBackground(null)` on cols 1–15, wiping the permanent `#D4EDDA` / `#FEE2E2` applied by `sheets_writer.py`. Pipeline run re-applies them, but Apps Script wipes them again on next click. | v2.4.3+ `Code.js` only touches cols 3–15 (C:O), leaving A/B untouched. Auto-deployed via clasp post-v2.6.0; manual re-paste is no longer required. |
 | Handled students keep reappearing on Sheet 1 | Pipeline had no handled-state tracking. | v2.4.4 `read_handled_student_ids` + `_hide_recently_handled` exclude them. |
 | `UnicodeEncodeError: 'charmap' codec can't encode '->'` | `generate_weekly_snapshot.py` print statements | Windows cp1252 console doesn't support U+2192 (`->`) or U+2500 (`-`) box-drawing chars | Use ASCII `->` and `-` in print statements. Em-dash `—` (U+2014) works fine in cp1252. |
 | `addBanding: You cannot add alternating background colors to a range that already has alternating background colors` | Re-run of `generate_weekly_snapshot.py` same week | `addBanding` isn't idempotent — errors if range already banded | In `main()`, fetch existing bandings via `spreadsheets.get(fields="sheets(properties.sheetId,bandedRanges)")` and queue `deleteBanding` requests BEFORE the new `addBanding` requests in the same batchUpdate. |
 | `deleteSheet: You can't remove all the visible sheets` when 0 unsent rows for the week (deeper issue caught after v2.5.0's `addBanding` fix) | In `generate_weekly_snapshot.py::main()`, old order was: create-file -> read-cumulative -> if all 3 weekly tabs empty, hide all + delete Sheet1 -> Google Sheets rejects (0 visible tabs not allowed) | v2.5.1: restructured to read cumulative tabs FIRST. If `total_rows == 0`, log and exit before any file is created. If a file already exists from a prior run, leave it untouched. |
 | Hourly pipeline crashes during `_ensure_all_tabs` with `HttpError 500 "Internal error encountered"` then `TimeoutError`, exits 1, next hourly run self-recovers | Sustained transient Sheets API hiccup (~3+ min). The old `_retry_api` had only 3 attempts × linear backoff (5s, 10s) = ~2 min coverage; outage outlasted the retry budget | v2.5.2: Replaced with shared `retry_helper.retry_api` — 5 attempts × exponential backoff with jitter (~5 min coverage), transient-only catch. Plus GHA `nick-fields/retry@v3` workflow-level retry as belt-and-suspenders. |
 | Sent Week stamps land on wrong row in cumulative tab (rare; only when Apps Script edits the same tab during a snapshot run) | `generate_weekly_snapshot.py` stamped by row number stored at read time; Apps Script's `removeStudentFromCumulativeTabs_` could shift rows between read (~T) and stamp (~T+5s) | v2.5.3: stamp by student_id lookup re-fetched immediately before stamping. Re-read of col M is wrapped in `_retry`. Rows that vanished between read and stamp are silently skipped. |
+| Apps Script changes don't take effect in the corrections spreadsheet | Pre-v2.6.0: manual paste skipped or forgotten. Post-v2.6.0: GHA secrets not configured, OR `npm run deploy` not run locally. | (a) Check GHA Actions tab — look for "Auto-deploy Apps Script (clasp)" run status. If skipped due to missing secrets, set CLASPRC_JSON + CLASP_SCRIPT_ID per README. (b) Run `npm run deploy` locally. (c) Verify with `clasp pull` to a temp dir + diff against repo. |
 
 ## Known Limitations
 
@@ -431,7 +471,7 @@ insufficient.
 - **Banding covers 200 data rows** — Alternating row colors extend to row 206. If cumulative sheets exceed 200 approved rows, increase the `end_row` floor in `_format_visible_sheet()`.
 - **Reason for Rejection column not in QUERY output** — Sheet 6 QUERY reads from `_RejectedData` A:M (13 cols). The "Reason for Rejection" header is in col N (col 14) but the column content is manually entered by IMs, not populated by QUERY.
 - **Row-stamp race**: The stamping pass uses row numbers captured during the
-  earlier read pass. If `apps_script/Code.gs::removeStudentFromCumulativeTabs_`
+  earlier read pass. If `Code.js::removeStudentFromCumulativeTabs_`
   deletes a row from a cumulative tab between the snapshot's read (~T) and
   stamp (~T+5s), the stored row number can shift, causing the stamp to land
   on the wrong row OR fail with "range not found". Probability is low (5s
