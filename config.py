@@ -190,6 +190,9 @@ SENT_WEEK_HEADER = "Sent Week"
 WEEKLY_TAB_CORRECTIONS = "Correction List"
 WEEKLY_TAB_ADDITIONS = "Roster Additions"
 WEEKLY_TAB_UNENROLLMENTS = "Roster Unenrollments"
+# v2.6.1: support-packet Instructions tab (added when --all-unsent flag is used).
+# Pinned to sheet index 0 (first tab) so support sees it on open.
+WEEKLY_TAB_INSTRUCTIONS = "Instructions"
 
 # Weekly-tab → source cumulative tab mapping
 WEEKLY_SOURCE_TABS = {

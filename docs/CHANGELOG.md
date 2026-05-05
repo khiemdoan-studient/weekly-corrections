@@ -1,5 +1,35 @@
 # Changelog
 
+## [v2.6.1] - 2026-05-05
+
+### Added
+- **`config.py`**: new constant `WEEKLY_TAB_INSTRUCTIONS = "Instructions"` (~line 195) — the user-facing tab name for the support-packet guidance tab. Pinned at sheet index 0 when present.
+- **`generate_weekly_snapshot.py`**: new `--all-unsent` CLI flag (argparse, registered in `__main__`). When set, switches the snapshot to **support-packet mode**:
+  - Filter: includes EVERY row with a blank `Sent Week`, regardless of which week. Default mode (no flag) still uses blank-OR-current-Monday.
+  - Adds an `Instructions` tab with plain-language guidance for the support team (what each tab means, how to find a student in SIS, column reference, who to contact). Pinned to index 0 so it's the first tab support sees.
+- **`generate_weekly_snapshot.py`**: new helper `_build_instructions_rows(generation_iso, total_rows, per_tab_counts)` (~line 332) — returns list of `(text, style)` tuples driving the Instructions tab content. Style ∈ {`title`, `h2`, `h3`, `body`, `blank`}.
+- **`generate_weekly_snapshot.py`**: new helper `_instructions_format_requests(sheet_id, rows)` (~line 405) — returns Sheets API batchUpdate requests applying per-row formatting (navy title bg, h2 bold 13pt, h3 bold 11pt), wraps col A at 900px, hides cols B-Z, and pins the tab at index 0.
+- **`generate_weekly_snapshot.py`**: `filter_for_week()` gained an `all_unsent=False` keyword argument. Default behavior unchanged. When `True`, filter reduces to "include if `Sent Week` is blank" — same blank-row check that supplies the empty-row guard from v2.5.0.
+
+### Why
+User asked for "a document I can send to support with the correction list" — generated on demand, off the regular Monday cron schedule, covering ALL pending corrections (not just this week's). Previously support had to be invited to the weekly file or the user had to manually copy rows; now `python generate_weekly_snapshot.py --all-unsent` produces a self-contained, support-friendly Sheet with built-in guidance.
+
+### Verified
+- `python generate_weekly_snapshot.py --help` shows the new `--all-unsent` flag with a usage example.
+- Live run (2026-05-05): `python generate_weekly_snapshot.py --all-unsent` produced sheet `1vjIY6hVwyOcUwOZrsXLbSVWG-nAUsE4ZRwRNUZaEgJs` with 4 tabs in this order:
+  - index=0 `Instructions` (28 rows, visible) — pinned correctly
+  - index=1 `Correction List` (2 rows + header, visible)
+  - index=2 `Roster Additions` (header only, hidden — empty-tab guard working)
+  - index=3 `Roster Unenrollments` (1 row + header, visible)
+- 3 source rows stamped with `2026-05-04` in `_ApprovedData` (2) and `_UnenrollData` (1), so subsequent default-mode runs won't re-bundle them.
+- Default mode (`python generate_weekly_snapshot.py` without flag) unchanged — `filter_for_week()` still defaults to `all_unsent=False` and the Instructions tab is only added when `all_unsent=True`. Monday cron behavior is identical to v2.6.0.
+
+### Usage
+```
+python generate_weekly_snapshot.py --all-unsent
+```
+Re-running `--all-unsent` is idempotent for the same week: the existing weekly file is updated in place (same file ID, support's link still works), and stamped rows are not re-stamped on subsequent runs.
+
 ## [v2.6.0] - 2026-04-30
 
 ### Added
