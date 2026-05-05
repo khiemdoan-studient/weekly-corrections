@@ -11,6 +11,14 @@ permissions:
   issues: write   # to open the weekly summary issue
   actions: read   # health_report.py reads run history
 
+# Audit-fix 2026-04-30: Mon 12:00 UTC overlaps with the hourly-pipeline run
+# at 12:00 UTC. Both share write access to GitHub Issues (smart-notify on
+# hourly + the health-report opener here). Different labels, but cleaner to
+# serialize. cancel-in-progress=false: queue, don't drop the report.
+concurrency:
+  group: weekly-corrections-pipeline
+  cancel-in-progress: false
+
 jobs:
   report:
     runs-on: ubuntu-latest
