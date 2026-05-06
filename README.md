@@ -5,20 +5,26 @@ Automated comparison of MAP roster (source of truth) against SIS pipeline data (
 ## Architecture
 
 ```
-MAP Roster (Google Sheet)          BigQuery (alpha_roster)
-  9 campus sheets, 2,030 enrolled    ~8,300 deduped students
-        |                                    |
-        v                                    v
-    Python: Sheets API read         Python: BQ client query
-        |                                    |
-        +----------- Compare by Student_ID --+
-                           |
-                     3 mismatch types:
-                     • Roster Addition  (in MAP, not in SIS)
-                     • Field mismatch   (in both, fields differ)
-                     • Unenrolling      (not in MAP, enrolled in SIS)
-                           |
-                           v
+MAP Roster (Google Sheet)    SIS source-of-truth (per campus)
+  11 campus tabs:               9 Dash → BigQuery alpha_roster (~8,700 students)
+  - 9 Dash campuses             2 Timeback → OneRoster API live (~76 students)
+  - Vita (Timeback)                       (Vita + ScienceSIS, v2.7.0+)
+  - ScienceSIS (Timeback)
+       |                                |                  |
+       v                                v                  v
+   read_map_roster()         read_sis_data()    query_timeback_enrolled()
+       |                                |                  |
+       |                                +-- merge (Timeback wins on overlap)
+       |                                          |
+       +----- compare_students() by student_id ---+
+                          |
+                    4 mismatch types:
+                    • Roster Addition  (in MAP, not in SIS)
+                    • Field mismatch   (in both, fields differ)
+                    • Unenrolling      (not in MAP, enrolled in SIS)
+                    • IM-flagged Unenroll (Unenroll=TRUE on ISR + still SIS-enrolled)
+                          |
+                          v
             "Automated Weekly Corrections" spreadsheet
               Sheet 1: MAP data + Accept/Reject checkboxes
               Sheet 2: SIS data (same students)

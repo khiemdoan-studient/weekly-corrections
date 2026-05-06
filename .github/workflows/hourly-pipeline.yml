@@ -44,6 +44,22 @@ jobs:
           # Sanity check that it's valid JSON
           python -c "import json; json.load(open('keys/sa-main.json'))"
 
+      # v2.7.0: Timeback OneRoster credentials for Vita + ScienceSIS SIS bridge.
+      # Fail-soft when the secret is missing — pipeline continues with Dash
+      # data only and Vita/ScienceSIS students surface as Roster Additions.
+      - name: Write Timeback creds from secret (fail-soft)
+        env:
+          TIMEBACK_CREDS_JSON: ${{ secrets.TIMEBACK_CREDS_JSON }}
+        run: |
+          if [ -n "$TIMEBACK_CREDS_JSON" ]; then
+            mkdir -p keys
+            printf '%s' "$TIMEBACK_CREDS_JSON" > keys/timeback-creds.json
+            python -c "import json; json.load(open('keys/timeback-creds.json'))"
+            echo "Timeback creds written."
+          else
+            echo "::warning::TIMEBACK_CREDS_JSON secret not set. Vita + ScienceSIS will surface as Roster Additions until secret is configured."
+          fi
+
       - name: Run generate_corrections.py (with retry on failure)
         uses: nick-fields/retry@v3
         with:
@@ -54,7 +70,7 @@ jobs:
 
       - name: Clean up credentials
         if: always()
-        run: rm -f keys/sa-main.json
+        run: rm -f keys/sa-main.json keys/timeback-creds.json
 
       # v2.5.3: smart-notify — only escalate on persistent failures.
       # Counts consecutive failures of THIS workflow; opens (or comments on)

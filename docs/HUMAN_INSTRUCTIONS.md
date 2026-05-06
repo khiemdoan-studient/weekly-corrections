@@ -73,6 +73,18 @@ You should rarely get a failure email anymore.
 | Row stays hidden | 7 days |
 | Row reappears on Sheet 1 | Only if mismatch still exists in MAP vs SIS after 7 days (data team hasn't processed it) |
 
+## Supported campuses
+
+The pipeline now supports **11 campuses** across two SIS systems. The IM workflow (check Unenroll on the ISR Student Roster, accept/reject on Sheet 1, etc.) is **identical** for all 11 — the difference is which SIS system the pipeline cross-references against, which is invisible to IMs.
+
+| Campus | SIS source | CMR tab |
+|--------|-----------|---------|
+| 9 Dash campuses (Reading CCSD, Metro, Allendale x3, Hardeeville x2, Ridgeland x2) | BigQuery `alpha_roster` (legacy) | `… (Dash)` |
+| Vita High School | Timeback OneRoster API | `Vita High School (TimeBack)` |
+| ScienceSIS | Timeback OneRoster API | `ScienceSIS (TimeBack)` |
+
+**For Vita / ScienceSIS IMs**: just check the Unenroll box on your ISR Student Roster like any Dash IM. Within ~1 hour the student will appear on Sheet 1 with Mismatch = "Unenrolling", and after you accept on Sheet 1 it will route into the next weekly support packet. No different steps.
+
 ## How to Review Corrections
 
 1. Open the [Automated Weekly Corrections](https://docs.google.com/spreadsheets/d/12dqu58KKdsZN9nLre9Fntkk7vSILu3KfcW4WDvo5-Ls) spreadsheet

@@ -1,5 +1,46 @@
 # Changelog
 
+## [v2.7.0] - 2026-05-06
+
+### Added
+- **`config.py`**:
+  - 2 new entries in `CAMPUS_SHEETS`: `"ScienceSIS (TimeBack)"` + `"Vita High School (TimeBack)"`. These are Timeback-backed campuses whose SIS source-of-truth is the OneRoster API, NOT the alpha_roster BQ table.
+  - `MAP_HEADER_MAP["ext_student_id"]` set gained `"alpha student id"` (the External Student ID header text used on the new Timeback CMR tabs).
+  - 2 new entries in `ISR_CONFIG` for the Vita + ScienceSIS ISRs (`1sOSwvw…` + `1SjVoQ…`). Both have `sr_unenroll_col=23` (col X), `mr_unenroll_col=27` (col AB).
+  - New constant `TIMEBACK_CAMPUSES`: maps each Timeback CMR tab name to the school's OneRoster `sourcedId` UUID (Vita = `e57cb46d-…`, ScienceSIS = `7c475cf4-…`).
+  - New constant `TIMEBACK_CREDS_PATH`: file path for Timeback API credentials (`keys/timeback-creds.json`, gitignored).
+- **`timeback_sis.py`** (NEW, ~210 lines): self-contained OneRoster client. Wraps just the OAuth2 + `GET /schools/{id}/students` endpoint of `api.alpha-1edtech.ai`. Public API: `query_timeback_enrolled(timeback_campuses)` returns a dict keyed by `legacyDashStudentId` shaped like `query_alpha_roster` output (so `compare_students` can consume both sources without changes). Falls back to `COGNITO_CLIENT_ID` + `COGNITO_CLIENT_SECRET` env vars if `keys/timeback-creds.json` is absent.
+- **`generate_corrections.py::read_combined_sis_data`**: new function. Calls `read_sis_data` (alpha_roster) + `query_timeback_enrolled` and merges the two into a single SIS dict. Timeback wins on `student_id` collisions (per user spec — the migration window has ~62 students existing in both alpha_roster and Timeback, and Timeback is the new system of record). On Timeback API failure, logs the error and continues with Dash data only (Vita/ScienceSIS will surface as Roster Additions until the API recovers — graceful degradation).
+- **`generate_corrections.py::read_map_roster`**: empty-Notes Timeback rows now coerced to `notes = "Enrolled"` so they enter `map_enrolled` and the IM-checkbox unenroll path can fire. Dash campuses still skip empty-Notes rows (existing behavior unchanged).
+- **`requirements.txt`**: added `requests` (for `timeback_sis.py`).
+- **`.github/workflows/hourly-pipeline.yml`**: new "Write Timeback creds from secret (fail-soft)" step. Reads `TIMEBACK_CREDS_JSON` GHA secret and writes it to `keys/timeback-creds.json` before running `generate_corrections.py`. When the secret is missing, logs a `::warning::` and pipeline continues with Dash data only. Cleanup step now also removes `keys/timeback-creds.json`.
+
+### Why
+User requested unenroll-checkbox parity for two new campuses (Vita + Science SIS) that migrated to Timeback's OneRoster API. The 9 existing Dash campuses cross-reference against `alpha_roster` BQ table; Timeback campuses need the live OneRoster API as source-of-truth. This release adds the SIS-bridge plumbing without changing any user-facing workflow — IMs check the same Unenroll checkbox on their ISR, and the same Sheet 1 / Apps Script / weekly-snapshot flow handles the rest.
+
+### Verified
+- `python -m py_compile config.py timeback_sis.py generate_corrections.py` → compile OK.
+- Isolated module test: `query_timeback_enrolled(TIMEBACK_CAMPUSES)` returned 76 students across 2 campuses (52 ScienceSIS + 24 Vita, 10 skipped for missing `legacyDashStudentId`). OAuth handshake works; pagination works; metadata bridge to `legacyDashStudentId` works.
+- `python setup_unenroll_columns.py` → wrote SR col X + MR col AB Unenroll columns on both Vita + ScienceSIS ISRs; wrote IMPORTRANGE at CMR `'ScienceSIS (TimeBack)'!AB2` and `'Vita High School (TimeBack)'!AB2`. Existing 9 Dash ISRs re-confirmed as no-op.
+- `python build_unenroll_queue.py` → added Vita + ScienceSIS QUERY+IMPORTRANGE blocks at rows 455 + 505 of "Unenroll Queue (Live)" tab.
+- `python generate_corrections.py` end-to-end:
+  - MAP roster: 2,084 enrolled (was 2,028 pre-v2.7.0 — added 38 ScienceSIS + 18 Vita).
+  - Combined SIS: 8,723 students (8,709 Dash + 76 Timeback). 62 overlapping student_ids; Timeback entries take precedence.
+  - Total corrections: 2,100 (1,939 → 2,100, +161 new from Vita/ScienceSIS).
+  - Unenrolling mismatches: 38 (was 37 — +1 from Notes-based path on a Vita/ScienceSIS student).
+  - Pipeline runtime: ~18s (was ~15s pre-v2.7.0; +3s for the 2 OneRoster API calls).
+- Live-sheet probe of `_CorrData` confirmed 20 Vita + 52 ScienceSIS rows surface; sample row contents look correct.
+
+### Latency
+The 2 OneRoster API calls (one per Timeback school) add ~3s to each hourly cron run. User confirmed acceptable trade-off for live source-of-truth correctness.
+
+### User action required
+Add GHA secret `TIMEBACK_CREDS_JSON` containing the JSON contents of `keys/timeback-creds.json`:
+```json
+{"client_id": "...", "client_secret": "..."}
+```
+Until the secret is configured, the GHA hourly workflow logs a warning and runs with Dash-only SIS data — Vita/ScienceSIS students will surface as Roster Additions instead of correctly comparing against Timeback. Local runs already work because `keys/timeback-creds.json` is committed to your local checkout.
+
 ## [v2.6.1] - 2026-05-05
 
 ### Added

@@ -4,7 +4,9 @@
 
 This tool compares student enrollment data between two sources:
 1. **MAP Roster** (Google Sheet) — the source of truth for student enrollment
-2. **SIS Pipeline** (BigQuery `alpha_roster` table) — deduped export from Athena `alpha_student`
+2. **SIS** — depends on the campus:
+   - 9 Dash campuses → BigQuery `alpha_roster` table (deduped export from Athena `alpha_student`).
+   - 2 Timeback campuses (Vita + ScienceSIS) → OneRoster API (`api.alpha-1edtech.ai`) live each run, via `timeback_sis.py`. Added in v2.7.0.
 
 Students with mismatched data appear in a corrections spreadsheet for manager review.
 
@@ -12,9 +14,10 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `generate_corrections.py` | ~420 | Main orchestrator: auth, read MAP, query BQ, compare, filter recently-handled, write |
-| `config.py` | ~90 | Constants, header mappings, campus list, sheet IDs |
+| `generate_corrections.py` | ~470 | Main orchestrator: auth, read MAP, query BQ + Timeback, compare, filter recently-handled, write. v2.7.0: `read_combined_sis_data` merges alpha_roster + Timeback OneRoster results. |
+| `config.py` | ~110 | Constants, header mappings, campus list, sheet IDs. v2.7.0: adds `TIMEBACK_CAMPUSES` + `TIMEBACK_CREDS_PATH`. |
 | `queries.py` | ~30 | Single BQ query function for alpha_roster |
+| `timeback_sis.py` | ~210 | v2.7.0: OneRoster API bridge. OAuth2 + GET /schools/{id}/students. `query_timeback_enrolled()` returns dict shaped like alpha_roster. Self-contained — does NOT depend on sibling `timeback-data-pipeline/oneroster_client.py` (intentional duplication; document any drift). |
 | `sheets_writer.py` | ~850 | Sheets API: hidden tabs, QUERY formulas, title/caption, filters, format |
 | `Code.js` | ~370 | Apps Script source at repo root: onEdit accept/reject routing, clear on filter change. Auto-deployed via clasp (was `apps_script/Code.gs` pre-v2.6.0). |
 | `appsscript.json` | ~7 | Apps Script manifest (TZ America/New_York, V8 runtime). Pushed alongside Code.js by clasp. |
@@ -173,6 +176,47 @@ accepted corrections.
 Default mode has NO Instructions tab. Adding the tab on the regular
 Monday cron would be noisy (3 tabs stay simpler for routine use); it's
 opt-in for ad-hoc support handoffs only.
+
+## Timeback SIS bridge (v2.7.0)
+
+Two campuses migrated off Dash/alpha_roster to Timeback's OneRoster API: **Vita High School** and **ScienceSIS**. The CMR tabs `"Vita High School (TimeBack)"` and `"ScienceSIS (TimeBack)"` mix into the same pipeline as the 9 Dash campuses, but the SIS-side cross-reference goes to the OneRoster API instead of `alpha_roster` BQ.
+
+### Architecture
+```
+CMR Vita / ScienceSIS tab          alpha_roster BQ (Dash)         OneRoster API (Timeback)
+   38 + 18 enrolled                ~8,700 deduped students        76 currently-rostered
+        |                                  |                              |
+        v                                  v                              v
+read_map_roster()                   read_sis_data()              query_timeback_enrolled()
+        |                                  |                              |
+        |                                  +----- merge (Timeback wins) --+
+        |                                                |
+        +--------- compare_students() ------------------+
+                            |
+                     same 4 mismatch types as Dash
+```
+
+### Key files
+- `timeback_sis.py` — self-contained OneRoster client. ~210 lines. Public API: `query_timeback_enrolled(timeback_campuses)`. Returns dict keyed by `legacyDashStudentId` shaped exactly like `query_alpha_roster` output.
+- `keys/timeback-creds.json` — Cognito OAuth2 credentials. Gitignored. Format: `{"client_id": "...", "client_secret": "..."}`. In GHA, the workflow writes this from `TIMEBACK_CREDS_JSON` secret.
+- `config.TIMEBACK_CAMPUSES` — dict mapping CMR tab name → school sourcedId UUID.
+
+### Identifier bridge
+The CMR `Student_ID` column for Vita/ScienceSIS rows holds Timeback's `metadata.legacyDashStudentId` (e.g. `066-6757`, `033-2154`), NOT the Timeback `sourcedId` UUID. So `query_timeback_enrolled` keys its returned dict by `legacyDashStudentId` to match what `compare_students` looks up.
+
+Students whose `legacyDashStudentId` is empty in the OneRoster response are skipped (typically test accounts; ~10 of 86 students at the time of v2.7.0 launch).
+
+### Empty Notes coercion
+For Timeback CMR tabs, the Notes column is NOT maintained by IMs (the OneRoster API is the SIS source). `read_map_roster` coerces empty Notes to `"Enrolled"` so Timeback rows enter `map_enrolled` and the IM-checkbox unenroll path can fire. Dash campuses still skip empty-Notes rows (existing behavior).
+
+### Merge precedence
+On `student_id` collision (62 students currently exist in both alpha_roster and Timeback during the migration window), **Timeback wins**. This makes Timeback the authoritative source for those 62 students' field comparisons.
+
+### Failure mode
+On Timeback API failure (auth, network, rate limit after retries exhausted), `read_combined_sis_data` logs the error and continues with Dash data only. Vita/ScienceSIS students will surface as "Roster Addition" mismatches (because they're absent from the SIS dict) instead of correctly cross-referenced. Better to surface noise than to crash the pipeline. The next hourly run typically recovers.
+
+### Cross-repo drift watch
+`timeback_sis.py` duplicates a narrow slice of `timeback-data-pipeline/oneroster_client.py` (OAuth + GET /schools/{id}/students only). If the OneRoster API changes auth flow, endpoint paths, or response schema, BOTH files need updating. Look for `BASE_URL`, `TOKEN_URL`, and `get_students` in both repos.
 
 ## ISR (Individual Student Roster) Architecture
 

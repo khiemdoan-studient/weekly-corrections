@@ -32,6 +32,12 @@ CAMPUS_SHEETS = [
     "Allendale Fairfax Elementary School (Dash)",
     "Metro Schools (Dash)",
     "Reading CCSD (Dash)",
+    # v2.7.0: Timeback-backed campuses. SIS-side enrollment lookup goes via the
+    # OneRoster API (see TIMEBACK_CAMPUSES below + timeback_sis.py), NOT the
+    # alpha_roster BQ table. Students still appear on the same Sheet 1 with
+    # the same Mismatch Summary semantics.
+    "ScienceSIS (TimeBack)",
+    "Vita High School (TimeBack)",
 ]
 
 # ── MAP Roster header-based column mapping ──────────────────────────────────
@@ -56,7 +62,13 @@ MAP_HEADER_MAP = {
     "guide_first": {"teacher 1 first name", "teacher_first"},
     "guide_last": {"teacher 1 last name", "teacher_last"},
     "guide_email": {"teacher 1 email", "teacher_email"},
-    "ext_student_id": {"suns number", "external student id", "suns #", "external id"},
+    "ext_student_id": {
+        "suns number",
+        "external student id",
+        "suns #",
+        "external id",
+        "alpha student id",  # v2.7.0: Vita + ScienceSIS CMR header
+    },
     "unenroll": {"unenroll", "unenrolled"},
 }
 
@@ -124,7 +136,45 @@ ISR_CONFIG = {
         "sr_unenroll_col": 27,  # col AB — NEEDS TO BE ADDED
         "mr_unenroll_col": 29,  # col AD — new
     },
+    # ── v2.7.0: Timeback-backed ISRs ─────────────────────────────────────
+    # Layout differs from Dash ISRs: SR has 23 cols, MR has 40 cols.
+    # No Notes/Unenroll column on SR yet; setup_unenroll_columns.py adds
+    # them at SR col X (24th, idx 23) + MR col AB (28th, idx 27, mirroring
+    # the CMR Unenroll column position). The CMR's "Unenroll" header
+    # already exists at col AB on both Timeback campus tabs.
+    "ScienceSIS (TimeBack)": {
+        "isr_id": "1SjVoQRubz_nsD3YVKLf68KcTaZwx1s7CA5S9V_E8gQ8",
+        "mr_gid": 1256615349,
+        "sr_unenroll_col": 23,  # col X — NEW (no header yet)
+        "mr_unenroll_col": 27,  # col AB — NEW, matches CMR layout
+    },
+    "Vita High School (TimeBack)": {
+        "isr_id": "1sOSwvwPb8cXSfJgXF-E2Ur2v0lyvi1qkR94OvgQLQ4Y",
+        "mr_gid": 1256615349,
+        "sr_unenroll_col": 23,
+        "mr_unenroll_col": 27,
+    },
 }
+
+# ── Timeback (OneRoster) SIS bridge — v2.7.0 ───────────────────────────────
+# For Vita + ScienceSIS, the source-of-truth for "currently enrolled" is the
+# Timeback OneRoster API, NOT the alpha_roster BQ table. Each pipeline run
+# calls oneroster_client.get_students(school_id) for every Timeback campus
+# and merges the result into the SIS dict that compare_students consumes.
+#
+# Mapping is CMR tab name (must match CAMPUS_SHEETS) → Timeback school
+# sourcedId (UUID). Sourced from timeback-data-pipeline/oneroster_client.py
+# SCHOOL_IDS constant.
+TIMEBACK_CAMPUSES = {
+    "ScienceSIS (TimeBack)": "7c475cf4-12b4-40ed-8857-dc6e624a5fa1",
+    "Vita High School (TimeBack)": "e57cb46d-b6b0-4f45-96ed-327441b5d068",
+}
+
+# Path to Timeback API credentials JSON. Contains:
+#   {"client_id": "...", "client_secret": "..."}
+# Locally: file at this path. In GHA: workflow writes the TIMEBACK_CREDS_JSON
+# secret to this path before invoking generate_corrections.py.
+TIMEBACK_CREDS_PATH = os.path.join(KEYS_DIR, "timeback-creds.json")
 
 # ── Output sheet tab names ──────────────────────────────────────────────────
 # ── Row-hiding behavior ────────────────────────────────────────────────────

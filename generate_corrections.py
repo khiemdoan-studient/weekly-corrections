@@ -24,11 +24,13 @@ from config import (
     MAP_HEADER_MAP,
     OUTPUT_FIELDS,
     HIDE_HANDLED_DAYS,
+    TIMEBACK_CAMPUSES,  # v2.7.0
 )
 from datetime import datetime, timedelta
 from queries import query_alpha_roster
 from retry_helper import retry_api  # v2.5.2: shared exponential-backoff retry
 from sheets_writer import write_corrections
+from timeback_sis import query_timeback_enrolled  # v2.7.0
 
 
 def print_step(msg):
@@ -138,7 +140,15 @@ def read_map_roster(sheets_service):
             if not student_id:
                 continue
             if not notes:
-                continue
+                # v2.7.0: Timeback CMR tabs don't maintain the Notes column —
+                # the OneRoster API is the SIS source of truth, so empty
+                # Notes means "currently rostered". Coerce to "Enrolled"
+                # so the student enters map_enrolled and both the
+                # IM-checkbox path AND field-mismatch path can fire.
+                if sheet_name in TIMEBACK_CAMPUSES:
+                    notes = "Enrolled"
+                else:
+                    continue
 
             guide_first = _safe_get(row, col_map.get("guide_first"))
             guide_last = _safe_get(row, col_map.get("guide_last"))
@@ -270,6 +280,61 @@ def _split_name(full_name):
     first = parts[0]
     last = parts[1] if len(parts) > 1 else ""
     return first, last
+
+
+def read_combined_sis_data(bq_client):
+    """Read SIS data from BOTH sources and return a single merged dict.
+
+    v2.7.0: Dash campuses (9) cross-reference against the alpha_roster BQ
+    table (existing behavior). Timeback-backed campuses (Vita + ScienceSIS)
+    cross-reference against the OneRoster API live each run.
+
+    Both sources produce dicts keyed by `student_id` (Dash format like
+    `084-13193` for both — Timeback rows use legacyDashStudentId, which
+    matches the CMR Student_ID column for Vita/ScienceSIS rows).
+
+    Skips the Timeback fetch entirely if TIMEBACK_CAMPUSES is empty —
+    no extra latency for Dash-only deployments.
+
+    On Timeback API failure: logs the error and continues with just the
+    Dash sis_students dict. Vita/ScienceSIS rows will then surface as
+    "Roster Addition" mismatches (because they're absent from the SIS
+    dict) instead of correct "Unenrolling" detection. Better to surface
+    noise than to crash the whole pipeline run.
+    """
+    sis_students = read_sis_data(bq_client)
+
+    if not TIMEBACK_CAMPUSES:
+        return sis_students
+
+    print_step("2b. QUERYING TIMEBACK SIS DATA (OneRoster API)")
+    try:
+        timeback_students = query_timeback_enrolled(TIMEBACK_CAMPUSES)
+    except Exception as e:
+        print(f"\n  WARNING: Timeback API fetch failed: {e}")
+        print(
+            "  Vita/ScienceSIS students will surface as Roster Additions until "
+            "the Timeback API recovers. Pipeline continuing with Dash data only."
+        )
+        return sis_students
+
+    # Merge: Timeback wins on key collision. The Vita/ScienceSIS migration
+    # window has ~62 students existing in BOTH alpha_roster (legacy Dash row)
+    # AND Timeback (new system of record). Per user spec, Timeback is the
+    # source of truth for these campuses, so it must override Dash on overlap.
+    combined = dict(sis_students)
+    overlap = set(sis_students.keys()) & set(timeback_students.keys())
+    if overlap:
+        print(f"  NOTE: {len(overlap)} student_id(s) appear in both Dash + Timeback")
+        print(
+            f"        sources. Timeback entries take precedence: {sorted(overlap)[:5]}"
+        )
+    combined.update(timeback_students)
+    print(
+        f"  Total combined SIS: {len(combined):,} students "
+        f"({len(sis_students):,} Dash + {len(timeback_students):,} Timeback)"
+    )
+    return combined
 
 
 # ── Comparison Engine ──────────────────────────────────────────────────────
@@ -498,9 +563,9 @@ def main():
     bq_client = bigquery.Client(project=BQ_PROJECT, credentials=creds)
     sheets_service = build("sheets", "v4", credentials=creds)
 
-    # Read data from both sources
+    # Read data from both sources (v2.7.0: Dash via BQ + Timeback via OneRoster API)
     map_enrolled, map_non_enrolled = read_map_roster(sheets_service)
-    sis_students = read_sis_data(bq_client)
+    sis_students = read_combined_sis_data(bq_client)
 
     # Compare and find mismatches
     corrections_map, corrections_sis = compare_students(
