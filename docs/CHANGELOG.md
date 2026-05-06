@@ -1,5 +1,28 @@
 # Changelog
 
+## [v2.7.2] - 2026-05-06
+
+### Fixed
+- **REGRESSION introduced in v2.7.0**: External Student ID auto-detection broken for ALL 9 Dash CMR tabs. v2.7.0 added `"alpha student id"` to `MAP_HEADER_MAP["ext_student_id"]` so the new Vita / ScienceSIS CMR tabs would have ExtSID detected. But every Dash CMR also has BOTH an "Alpha Student ID" column (col W or X) AND a "SUNS Number" / "External ID" column (col AB or AC). `_detect_columns` iterates left-to-right and picks the FIRST match, so all 9 Dash tabs started writing the Alpha Student ID value (e.g. `'11733'`) into _CorrData col L instead of the SUNS Number (e.g. `'4689568995'`). alpha_roster compares against SUNS, producing a false "External Student ID" mismatch on virtually every Dash student.
+  - Pre-v2.7.2 state: 1,867 spurious Dash ExtSID mismatches (JHES 373, JRES 360, JRHS 307, JHMS 305, AFMS 167, AFES 151, RCSD 129, Metro 63, AASP 12).
+  - Post-v2.7.2 state: 0 Dash ExtSID mismatches.
+  - Single-line revert: drop `"alpha student id"` from the matcher set in `config.py::MAP_HEADER_MAP`.
+
+### Why Timeback campuses are unaffected
+v2.7.1's `is_timeback` branch in `_find_mismatches` already skips ExtSID comparison for Vita / ScienceSIS rows. They don't need ExtSID detection at all — col L stays blank for Timeback rows, and no comparison runs. User spec ("Forget about external student ID entirely for ScienceSIS / Vita") is preserved.
+
+### Why Reading CCSD is the same as pre-v2.7.0
+Reading CCSD's CMR has only an "Alpha Student ID" header (no "SUNS Number"). Pre-v2.7.0 the matcher didn't include "alpha student id" so Reading CCSD's ExtSID column was never detected — col L was blank, MAP "" vs SIS alpha_roster externalstudentid (whatever it has). v2.7.2 restores exactly this. No new behavior for Reading CCSD.
+
+### Verified
+- `python -m py_compile` passes.
+- End-to-end run: 1,870 matches (was 44 in v2.7.1 — the 1,826 Dash students that were spuriously mismatched on ExtSID now match cleanly). Field mismatches: 115 (was 1,941). Total corrections: 230 (was 2,056). 105 hidden-recently-handled. Pipeline runtime: 15.6s.
+- Live `_CorrData` probes (all PASS):
+  - Hardeeville 083-11733: dropped from _CorrData entirely (now matches cleanly, was previously false-ExtSID-mismatched).
+  - Total Dash ExtSID mismatch count: 0 (was 1,867).
+  - 5 user-flagged ScienceSIS students all routed correctly: 066-6749 Alanah + 066-6742 Autumn still on Sheet 1 as Unenrolling (pending IM acceptance); 066-6778 Arie + 066-6774 Armoni + 066-6773 Ataijah in `_UnenrollData` (already accepted by user between v2.7.1 and v2.7.2).
+  - Vita + ScienceSIS noise mismatches: 0 (no Level / Student Group / Guide Email / Guide Name / External Student ID surfaced).
+
 ## [v2.7.1] - 2026-05-06
 
 ### Fixed

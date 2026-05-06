@@ -67,7 +67,14 @@ MAP_HEADER_MAP = {
         "external student id",
         "suns #",
         "external id",
-        "alpha student id",  # v2.7.0: Vita + ScienceSIS CMR header
+        # v2.7.2: do NOT include "alpha student id" here. Every Dash CMR also
+        # has an "Alpha Student ID" column at col W/X (separate from the
+        # SUNS Number / External ID column at col AB/AC), and the auto-
+        # detector picks the leftmost match — so adding it broke Dash
+        # detection for all 9 campuses (1,867 false ExtSID mismatches).
+        # Timeback campuses (Vita + ScienceSIS) don't NEED ExtSID detection
+        # because v2.7.1's `is_timeback` branch in `_find_mismatches` skips
+        # the comparison entirely. Net: blank col L on Timeback rows is fine.
     },
     "unenroll": {"unenroll", "unenrolled"},
 }
