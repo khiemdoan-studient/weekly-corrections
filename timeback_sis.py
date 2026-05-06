@@ -205,6 +205,11 @@ def query_timeback_enrolled(timeback_campuses=None):
     out = {}
     skipped_no_sid = 0
     for campus_label, school_id in timeback_campuses.items():
+        # v2.7.1: strip " (TimeBack)" suffix so the Campus value matches what's
+        # actually in the CMR Campus column (e.g. "ScienceSIS", not
+        # "ScienceSIS (TimeBack)"). Without this, every Timeback row produced
+        # a noise Campus mismatch on every comparison.
+        campus_short = campus_label.replace(" (TimeBack)", "")
         print(f"  Timeback: fetching '{campus_label}' (school_id={school_id[:8]}…)")
         users = client.get_students(school_id)
         kept = 0
@@ -235,7 +240,7 @@ def query_timeback_enrolled(timeback_campuses=None):
             # Leave blank — Vita/ScienceSIS rows won't trigger "Guide" mismatches
             # because the comparison lower-cases empty == empty.
             out[legacy_sid] = {
-                "Campus": (meta.get("Campus") or campus_label).strip(),
+                "Campus": (meta.get("Campus") or campus_short).strip(),
                 "Grade": grade_str,
                 "Level": (meta.get("level") or "").strip(),
                 "First Name": given,

@@ -170,6 +170,14 @@ TIMEBACK_CAMPUSES = {
     "Vita High School (TimeBack)": "e57cb46d-b6b0-4f45-96ed-327441b5d068",
 }
 
+# v2.7.1: bare campus values (no " (TimeBack)" suffix) — what actually appears
+# in the CMR Campus column for these rows. Used by `_find_mismatches` to
+# detect Timeback rows and skip fields the OneRoster API doesn't expose
+# (Level, External Student ID, Student Group, Guide*). Without this skip,
+# every Timeback row produces noise mismatches like "Level, External Student
+# ID" because MAP has those fields populated and Timeback returns "".
+TIMEBACK_CAMPUS_NAMES = {"ScienceSIS", "Vita High School"}
+
 # Path to Timeback API credentials JSON. Contains:
 #   {"client_id": "...", "client_secret": "..."}
 # Locally: file at this path. In GHA: workflow writes the TIMEBACK_CREDS_JSON

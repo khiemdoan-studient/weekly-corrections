@@ -25,6 +25,7 @@ from config import (
     OUTPUT_FIELDS,
     HIDE_HANDLED_DAYS,
     TIMEBACK_CAMPUSES,  # v2.7.0
+    TIMEBACK_CAMPUS_NAMES,  # v2.7.1
 )
 from datetime import datetime, timedelta
 from queries import query_alpha_roster
@@ -396,8 +397,11 @@ def compare_students(map_enrolled, map_non_enrolled, sis_students):
             roster_addition_count += 1
             continue
 
-        # Compare fields
-        mismatches = _find_mismatches(map_rec, sis_rec)
+        # Compare fields. v2.7.1: skip noise mismatches for Timeback campuses
+        # whose OneRoster API doesn't expose Level / External Student ID /
+        # Student Group / Guide*.
+        is_timeback = map_rec.get("Campus", "").strip() in TIMEBACK_CAMPUS_NAMES
+        mismatches = _find_mismatches(map_rec, sis_rec, is_timeback=is_timeback)
 
         if mismatches:
             map_rec_copy = dict(map_rec)
@@ -443,22 +447,39 @@ def compare_students(map_enrolled, map_non_enrolled, sis_students):
     return corrections_map, corrections_sis
 
 
-def _find_mismatches(map_rec, sis_rec):
-    """Compare two student records and return list of mismatched field names."""
+def _find_mismatches(map_rec, sis_rec, is_timeback=False):
+    """Compare two student records and return list of mismatched field names.
+
+    v2.7.1: when `is_timeback=True`, skip fields the Timeback OneRoster API
+    doesn't expose (Level, Student Group, Guide Email, Guide Name combine,
+    External Student ID). Without this, every Vita / ScienceSIS row that
+    doesn't hit the Unenrolling path generated a noise mismatch chain
+    "Level, External Student ID" because MAP had values and SIS returned "".
+    """
     mismatches = []
 
-    # Direct field comparisons (case-insensitive, stripped)
+    # Fields compared on ALL campuses
     simple_fields = {
         "Campus": ("Campus", "Campus"),
         "Grade": ("Grade", "Grade"),
-        "Level": ("Level", "Level"),
         "First Name": ("First Name", "First Name"),
         "Last Name": ("Last Name", "Last Name"),
         "Email": ("Email", "Email"),
-        "Student Group": ("Student Group", "Student Group"),
-        "Guide Email": ("Guide Email", "Guide Email"),
-        "External Student ID": ("External Student ID", "External Student ID"),
     }
+    # Fields compared on Dash campuses only (Timeback OneRoster API doesn't
+    # expose these — would always show as noise mismatches)
+    if not is_timeback:
+        simple_fields.update(
+            {
+                "Level": ("Level", "Level"),
+                "Student Group": ("Student Group", "Student Group"),
+                "Guide Email": ("Guide Email", "Guide Email"),
+                "External Student ID": (
+                    "External Student ID",
+                    "External Student ID",
+                ),
+            }
+        )
 
     for label, (map_key, sis_key) in simple_fields.items():
         map_val = _normalize(map_rec.get(map_key, ""))
@@ -466,11 +487,13 @@ def _find_mismatches(map_rec, sis_rec):
         if map_val != sis_val:
             mismatches.append(label)
 
-    # Guide name comparison: combine MAP first+last → compare to SIS combined
-    map_guide = _normalize(map_rec.get("Guide Name", ""))
-    sis_guide = _normalize(sis_rec.get("Guide Name", ""))
-    if map_guide != sis_guide:
-        mismatches.append("Guide Name")
+    # Guide name comparison (Dash only — Timeback uses class-level enrollment,
+    # no per-student guide on the user record).
+    if not is_timeback:
+        map_guide = _normalize(map_rec.get("Guide Name", ""))
+        sis_guide = _normalize(sis_rec.get("Guide Name", ""))
+        if map_guide != sis_guide:
+            mismatches.append("Guide Name")
 
     return mismatches
 

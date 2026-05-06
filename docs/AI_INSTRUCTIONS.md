@@ -218,6 +218,33 @@ On Timeback API failure (auth, network, rate limit after retries exhausted), `re
 ### Cross-repo drift watch
 `timeback_sis.py` duplicates a narrow slice of `timeback-data-pipeline/oneroster_client.py` (OAuth + GET /schools/{id}/students only). If the OneRoster API changes auth flow, endpoint paths, or response schema, BOTH files need updating. Look for `BASE_URL`, `TOKEN_URL`, and `get_students` in both repos.
 
+### Field coverage for Timeback rows (v2.7.1)
+
+`_find_mismatches` accepts an `is_timeback` flag. When True (i.e. when `map_rec["Campus"]` is in `config.TIMEBACK_CAMPUS_NAMES = {"ScienceSIS", "Vita High School"}`), the comparison only inspects fields the Timeback OneRoster API actually exposes:
+
+| Field | Compared on Dash? | Compared on Timeback? |
+|-------|-------------------|------------------------|
+| Campus | yes | yes |
+| Grade | yes | yes |
+| First Name | yes | yes |
+| Last Name | yes | yes |
+| Email | yes | yes |
+| Level | yes | **NO** — API doesn't expose |
+| Student Group | yes | **NO** |
+| Guide Email | yes | **NO** |
+| Guide Name (first+last combined) | yes | **NO** |
+| External Student ID | yes | **NO** — Timeback uses `sourcedId`, no SUNS-equivalent |
+
+The IM-flagged Unenroll path runs identically for both: if `map_rec._unenroll_flag=True` AND `sis_rec.admissionstatus=="Enrolled"`, mismatch=Unenrolling and field comparison is short-circuited. The is_timeback flag only affects the *fallback* field-comparison path.
+
+`timeback_sis.py` strips `" (TimeBack)"` from `campus_label` when generating each student's `Campus` value, so `"ScienceSIS (TimeBack)"` (CMR tab name) becomes `"ScienceSIS"` (matches what's in the Campus column on the CMR row). Without this, every Timeback row would mismatch on Campus.
+
+### Staleness gotcha (v2.7.1 lesson)
+
+When `setup_unenroll_columns.py` first wires up `IMPORTRANGE` on a new ISR, the formula returns `#REF!` until a human opens the CMR and clicks "Allow access". A pipeline run while `IMPORTRANGE` is still in `#REF!` state reads `_unenroll_flag=False` for every Timeback student, even ones with TRUE on their ISR. They will appear as field-mismatches instead of Unenrolling. Re-run after `IMPORTRANGE` resolves and the routing corrects itself.
+
+This won't happen on hourly runs after the initial setup — `IMPORTRANGE` cache stays warm across runs.
+
 ## ISR (Individual Student Roster) Architecture
 
 Each of 9 campuses has a dedicated Google Sheet called an ISR (Individual Student Roster). The ISRs feed the CMR (Consolidated MAP Roster), which in turn feeds the pipeline.

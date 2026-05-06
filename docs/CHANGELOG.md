@@ -1,5 +1,36 @@
 # Changelog
 
+## [v2.7.1] - 2026-05-06
+
+### Fixed
+- **Noise field mismatches on Vita / ScienceSIS rows**. v2.7.0 compared all 9 fields (Campus, Grade, Level, First/Last/Email, Student Group, Guide Email, External Student ID, Guide Name combine) for every row — but the Timeback OneRoster API doesn't expose Level, External Student ID, Student Group, or Guide info. Result: every Vita / ScienceSIS row that didn't hit the Unenrolling path got a noise mismatch chain like `"Campus, Level, External Student ID"`, hiding actual issues.
+  - `generate_corrections.py::_find_mismatches` now takes an `is_timeback` flag. Compares only Campus / Grade / First / Last / Email when True. Skips Level, Student Group, Guide Email, External Student ID, and the Guide Name combine.
+  - `generate_corrections.py::compare_students` derives `is_timeback` from `map_rec["Campus"]` membership in the new `TIMEBACK_CAMPUS_NAMES` set.
+- **Systemic Campus mismatch on every Timeback row**. `timeback_sis.py` was setting `Campus = "ScienceSIS (TimeBack)"` (the CMR tab name) but MAP shows `Campus = "ScienceSIS"`. Every row mismatched on Campus. Now strips `" (TimeBack)"` from `campus_label` before populating each student's Campus field.
+
+### Added
+- **`config.py`**: `TIMEBACK_CAMPUS_NAMES = {"ScienceSIS", "Vita High School"}` — the bare campus values used by `_find_mismatches` to detect Timeback rows.
+
+### Why
+User reported: "Armoni Nelson (066-6774) and others have Unenroll=TRUE on the ISR but show up as 'Campus, Level, External Student ID' field-mismatches in the corrections sheet, not 'Unenrolling'. Forget about External Student ID entirely for ScienceSIS / Vita — those columns don't correspond."
+
+Root cause was two separate issues:
+1. **Staleness (no code fix needed).** At the moment of the v2.7.0 pipeline run earlier today, the CMR `IMPORTRANGE` for col AB was still resolving / not yet authorized. Pipeline read `_unenroll_flag=False` for everyone. Students whose Notes was non-empty + non-"Enrolled" (Alanah, Arie, Autumn) hit the Notes-based Unenrolling loop and routed correctly. Students whose Notes was empty got coerced to "Enrolled" by my v2.7.0 fix → went to `map_enrolled` → IM-flagged path saw `_unenroll_flag=False` → fell through to field comparison → got the wrong label. Re-running with IMPORTRANGE now resolved produces correct routing for all 5.
+2. **Noise mismatches (the user's explicit ask).** Even when the unenroll path fires correctly, every Timeback row that lands in field comparison surfaced 3-5 noise mismatches because the OneRoster API returns "" for fields MAP has populated. Skipping non-corresponding fields produces clean output.
+
+### Verified
+- `python -m py_compile` passes.
+- End-to-end pipeline run: 1,962 corrections written. IM-flagged Unenroll: 32 (was 22). Field mismatches: 1,941 (was 1,995, -54 noise mismatches removed). Matches: 44 (was 0 — Timeback students now match cleanly when there's nothing real to flag). Runtime: 19.4s.
+- Live `_CorrData` probe — all 5 user-flagged students show `Unenrolling`:
+  - 066-6749 Alanah Cossey: PASS
+  - 066-6778 Arie Sturgis: PASS
+  - 066-6774 Armoni Nelson: PASS
+  - 066-6773 Ataijah Mitchell: PASS
+  - 066-6742 Autumn Boothe: PASS
+- Zero violations on the Timeback noise-term scan (`Level`, `External Student ID`, `Student Group`, `Guide Email`, `Guide Name` — none appear in any Vita / ScienceSIS mismatch column).
+- Vita + ScienceSIS `_CorrData` mismatch breakdown: 26 Unenrolling + 1 Last Name + 1 Grade+Last Name = 28 total (was 72 in v2.7.0). All 2 remaining field mismatches are real data-team issues, not noise.
+- 9 Dash campuses unchanged (no regression).
+
 ## [v2.7.0] - 2026-05-06
 
 ### Added
