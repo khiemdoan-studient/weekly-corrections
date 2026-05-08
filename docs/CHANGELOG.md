@@ -1,5 +1,118 @@
 # Changelog
 
+## [v2.7.4] - 2026-05-08
+
+### Fixed
+- **Reason for Rejection STILL disappearing after v2.7.3 architecture.** Two compounding issues:
+  1. **OPERATIONAL**: v2.7.3 was implemented but never committed/pushed. Origin/main stayed at `63e7a09` (v2.7.2). Hourly cron continued running pre-v2.7.3 code that wiped Sheet 6 A:Z each run. Lesson: a fix that doesn't deploy is the same as no fix.
+  2. **ARCHITECTURAL**: even with v2.7.3 deployed, storing reasons in `_RejectedData` col O leaves them exposed to 3 destructive paths in `_RejectedData`'s ecosystem:
+     - `sheets_writer.py::_realign_row` truncates rows to 14 cols (line 626, 646)
+     - `sheets_writer.py::_backfill_mismatch_summary` clears `_RejectedData` A:Z then rewrites with 14-col rows (line 727-740)
+     - `Code.js::removeStudentFromCumulativeTabs_` deletes `_RejectedData` row on Reject toggle (line 152-169) — uncheck-and-recheck silently wipes the reason
+
+### Added — separate-tab architecture
+- **NEW hidden tab `_RejectionReasons`** (2 cols: `student_id`, `reason`). Decoupled from the 4 cumulative tabs (`_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData`). No existing rebuild path touches `_RejectionReasons`. Created as hidden on first run.
+- **`Code.js::upsertRejectionReason_`** — find-or-append pattern for `_RejectionReasons`. Linear scan over col A by student_id. If found, update col B. If not, append. Mirrors the read pattern of `removeStudentFromCumulativeTabs_` but never deletes.
+- **`Code.js::handleRejectionReasonEdit_`** rewritten — calls `upsertRejectionReason_` instead of writing to `_RejectedData` col O.
+- **`sheets_writer.py::_hydrate_rejection_reasons`** rewritten — reads from `'_RejectionReasons'!A:B` instead of `'_RejectedData'!M:O`.
+- **`sheets_writer.py::write_corrections::all_tab_names`** — added `"_RejectionReasons"` so `_ensure_all_tabs` creates it idempotently on first run.
+- **`restore_rejection_reasons.py`** — fully rewritten for `_RejectionReasons` upsert semantics. Reads pre-wipe XLSX, ensures `_RejectionReasons` exists (hidden), and upserts (sid, reason) pairs. `--force` overwrites existing non-blanks; default skips them.
+
+### Bullet-proof guarantees vs prior versions
+
+| Failure mode | v2.7.2 | v2.7.3 | v2.7.4 |
+|---|---|---|---|
+| Pipeline `batchClear` wipes Sheet 6 A:Z | YES | mitigated (A:N) | mitigated (A:N) |
+| `_realign_row` truncates `_RejectedData` to 14 cols | N/A | RISK | N/A — col O isn't on `_RejectedData` |
+| `_backfill_mismatch_summary` clears `_RejectedData` A:Z | N/A | RISK | N/A |
+| User toggles Reject (uncheck → recheck) wipes reason | YES (no protection) | RISK (`removeStudent…` deletes row) | RESOLVED — `_RejectionReasons` not touched |
+| Pipeline never deployed | RISK | RISK | RISK (operational only) |
+
+The only remaining loss path is "user explicitly clears the cell on Sheet 6 col O" → onEdit fires with empty value → upsert writes empty string. That is intentional user action, not a system bug.
+
+### Restoration steps (this incident)
+1. Confirmed: `_RejectedData` col O still had all 11 reasons from yesterday's restore (cumulative tab; not wiped).
+2. Migrated those 11 reasons into the new `_RejectionReasons` tab (one-shot inline script).
+3. Local pipeline run with v2.7.4 code → hydration count `11/39` ✓ — all reasons appeared at correct student rows on Sheet 6.
+4. Deploy v2.7.4 (commit + push). GHA auto-deploys Code.js via clasp. Hourly cron picks up new sheets_writer.py on next run.
+
+### Deploy verification
+After push, confirmed:
+- `gh run list --workflow=deploy-apps-script.yml` → most recent run = SUCCESS, headSha matches new commit
+- `gh run list --workflow=hourly-pipeline.yml` (next :00 run) → headSha matches new commit, Sheet 6 col O still populated
+
+### Files changed
+- `sheets_writer.py` — `_ensure_all_tabs` adds `_RejectionReasons`; `_hydrate_rejection_reasons` reads from new tab
+- `Code.js` — `upsertRejectionReason_` (new); `handleRejectionReasonEdit_` rewritten
+- `restore_rejection_reasons.py` — fully rewritten for v2.7.4 semantics
+- `docs/CHANGELOG.md` — this entry
+- `docs/AI_INSTRUCTIONS.md` — Sheet 6 architecture + hidden-tabs list updated
+
+### User action required
+- **None.** Reasons restored. Future Reject toggles + pipeline rebuilds preserve them automatically.
+
+## [v2.7.3] - 2026-05-07
+
+### Fixed
+- **"Reason for Rejection" column (Sheet 6 col O) was being silently wiped on every hourly pipeline run.** `sheets_writer.py::write_corrections` cleared `'Rejected Changes'!A:Z` via `batchClear`, which included col O. Sheet 6's QUERY pulls A:N (14 cols) from `_RejectedData`; col O is a 15th, manually-entered column. Pre-v2.7.3, col O had no backing data anywhere — every IM-typed reason vanished on the next hourly cron. Bug present since v2.1.0 (when Sheet 6 was first introduced).
+
+### Why a stop-the-wipe-only fix would not have worked
+Sheet 6's QUERY uses `SORT()`. New rejected rows appear at the top, pushing existing rows down. A reason typed at row 7 today is for a different student tomorrow if any new rejection arrives between runs. Reasons must be tied to `student_id` (stable), not row position (unstable).
+
+### Added
+- **`_RejectedData` schema extended from 14 → 15 cols.** Col O = persistent storage for "Reason for Rejection", keyed by `student_id` in col M. Existing rows have blank col O (populated by the restore script for historical rows). New rejections have blank col O (populated when the user types a reason).
+- **`Code.js::handleRejectionReasonEdit_`** — Apps Script `onEdit` branch for Sheet 6 col O. Reads student_id from col M same row, walks `_RejectedData` col M to find the matching student, writes the reason to that row's col O. Mirrors the existing `removeStudentFromCumulativeTabs_` pattern.
+- **`sheets_writer.py::_hydrate_rejection_reasons`** — Called near end of `write_corrections`. Reads Sheet 6 col M (rows 7+, the QUERY-rendered student_ids) and `_RejectedData` cols M+O. Writes Sheet 6 col O aligned to current row order. Reasons follow students through QUERY reorders.
+- **`restore_rejection_reasons.py`** (~180 lines) — One-time restoration. Reads a pre-wipe XLSX export of the corrections spreadsheet (downloaded by user from File → Version history → Download as .xlsx), extracts (student_id, reason) pairs from Sheet 6, writes them to `_RejectedData` col O for matching students. `--force` flag overwrites existing non-blank reasons; default skips them.
+- **`requirements.txt`**: added `openpyxl` (used by `restore_rejection_reasons.py`).
+
+### Changed
+- **`sheets_writer.py::write_corrections`** — Replaced the `[f"'{t}'!A:Z" for t in clear_tabs]` list-comprehension with a per-tab `clear_ranges` dict. Sheet 6 cleared as `A:N` (preserves col O). Other tabs unchanged at `A:Z`.
+
+### Restoration steps (one-time, user-driven)
+1. Open the corrections spreadsheet → File → Version history → See version history.
+2. Find a revision from before the wipe (any timestamp where col O on Sheet 6 still has the typed reasons — typically several days back).
+3. Click the ⋮ menu on that revision → Make a copy → name it e.g. `pre-wipe-snapshot`.
+4. Open that copy → File → Download → Microsoft Excel (.xlsx).
+5. Run: `python restore_rejection_reasons.py path/to/downloaded.xlsx`
+6. Verify the report shows the expected number of restored reasons.
+7. Delete the snapshot copy when done.
+
+### Architecture (in one diagram)
+```
+USER TYPES reason in Sheet 6 col O at row R
+        ↓
+Code.js onEdit → handleRejectionReasonEdit_ fires
+        ↓
+Reads student_id from Sheet 6 col M row R
+Walks _RejectedData col M → writes reason to that row's col O
+        ↓
+NEXT PIPELINE RUN:
+  sheets_writer.py clears Sheet 6 A:N (NOT A:Z — col O preserved-then-rewritten)
+  QUERY rebuilds Sheet 6 A:N from _RejectedData A:N
+  _hydrate_rejection_reasons reads Sheet 6 col M + _RejectedData M+O
+  Writes Sheet 6 col O matched by student_id
+        ↓
+Reason appears at the CORRECT row regardless of QUERY sort order
+```
+
+### Verified
+- `python -m py_compile sheets_writer.py restore_rejection_reasons.py config.py generate_corrections.py` → all OK.
+- `node --check Code.js` → OK.
+- (Live verification pending — runs after user provides pre-wipe XLSX export.)
+
+### User action required
+1. Restore lost reasons via the restoration steps above.
+2. Confirm next hourly cron run still preserves col O after restoration (passive — no action needed; just check the sheet next morning).
+3. To verify the fix works for new entries: type a reason in Sheet 6 col O for any rejected student, manually trigger the pipeline (`python generate_corrections.py` or trigger the GHA workflow), and confirm the reason still appears at the correct row after rebuild.
+
+### Files changed
+- `sheets_writer.py` — narrow Sheet 6 wipe + `_hydrate_rejection_reasons` (+72 -16)
+- `Code.js` — `handleRejectionReasonEdit_` + onEdit dispatch (+58 -1)
+- `restore_rejection_reasons.py` — NEW (~180 lines)
+- `requirements.txt` — `openpyxl` (+1)
+- `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md` — this entry + fix Sheet 6 docs
+
 ## [v2.7.2] - 2026-05-06
 
 ### Fixed

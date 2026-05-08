@@ -4,3 +4,4 @@ google-auth
 pyarrow
 tzdata
 requests          # v2.7.0: Timeback OneRoster API client (timeback_sis.py)
+openpyxl          # v2.7.3: read pre-wipe XLSX exports (restore_rejection_reasons.py)

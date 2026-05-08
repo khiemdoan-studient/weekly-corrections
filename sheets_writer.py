@@ -741,6 +741,96 @@ def _backfill_mismatch_summary(sheets_service, spreadsheet_id):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# REJECTION REASON HYDRATION (v2.7.3)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _hydrate_rejection_reasons(sheets_service, spreadsheet_id):
+    """Hydrate Sheet 6 col O ("Reason for Rejection") from `_RejectionReasons`.
+
+    `_RejectionReasons` is a dedicated 2-col tab (A=student_id, B=reason)
+    introduced in v2.7.4. It is decoupled from the 4 cumulative tabs and
+    therefore survives:
+      - `_migrate_cumulative_tabs` row truncation (only operates on cumulative tabs)
+      - `_backfill_mismatch_summary` clear-and-rewrite (only operates on cumulative tabs)
+      - `removeStudentFromCumulativeTabs_` row deletion (Reject toggles)
+      - any other rebuild path scoped to `_RejectedData`
+
+    Pre-v2.7.4 stored reasons in `_RejectedData` col O which suffered all
+    of the above. v2.7.3 added narrow-wipe + hydration but left col O on
+    `_RejectedData` exposed to migration/backfill/toggle paths.
+
+    Steps:
+      1. Read Sheet 6 col M (rows 7+) — QUERY-rendered student_ids
+      2. Read `_RejectionReasons` A:B — build {student_id: reason}
+      3. Write Sheet 6 col O aligned to current row order
+
+    Race protection: writes blanks for students with no stored reason. If a
+    user is mid-typing when the pipeline runs, the onEdit upsert is a
+    single-API-call write to `_RejectionReasons` and typically completes in
+    well under a second — much faster than the ~15s pipeline rebuild.
+    """
+    # Read Sheet 6 col M (rows 7+) — these are the QUERY-rendered student_ids
+    s6_resp = _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{TAB_REJECTED}'!M7:M",
+            valueRenderOption="FORMATTED_VALUE",  # force QUERY to compute
+        )
+        .execute(),
+        label="hydrate: read Sheet 6 col M",
+    )
+    s6_sids = [str(r[0] or "").strip() if r else "" for r in s6_resp.get("values", [])]
+    if not s6_sids:
+        return  # no rejected rows currently visible — nothing to hydrate
+
+    # Read `_RejectionReasons` A:B — build {student_id: reason}
+    rsn_resp = _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            range="'_RejectionReasons'!A:B",
+        )
+        .execute(),
+        label="hydrate: read _RejectionReasons",
+    )
+    sid_to_reason = {}
+    for row in rsn_resp.get("values", []):
+        if not row:
+            continue
+        sid = str(row[0] or "").strip() if len(row) >= 1 else ""
+        reason = str(row[1] or "").strip() if len(row) >= 2 else ""
+        if sid:
+            sid_to_reason[sid] = reason  # last-write-wins on dups (shouldn't occur)
+
+    # Build the col O values aligned to Sheet 6 row order
+    o_values = [[sid_to_reason.get(sid, "")] for sid in s6_sids]
+    end_row = 7 + len(o_values) - 1
+
+    # Write in one shot
+    _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .values()
+        .update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{TAB_REJECTED}'!O7:O{end_row}",
+            valueInputOption="RAW",
+            body={"values": o_values},
+        )
+        .execute(),
+        label="hydrate: write Sheet 6 col O",
+    )
+
+    nonblank = sum(1 for row in o_values if row[0])
+    print(
+        f"  Hydrated Sheet 6 col O: {nonblank}/{len(o_values)} row(s) with stored reasons."
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # MAIN WRITE FUNCTION
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -760,6 +850,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         "_AdditionsData",
         "_UnenrollData",
         "_RejectedData",
+        "_RejectionReasons",  # v2.7.4: 2-col tab (sid, reason). Decoupled from cumulative tabs.
         "_Lists",
         TAB_ADDITIONS,
         TAB_UNENROLL,
@@ -807,24 +898,29 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         .execute()
     )
 
-    # Clear visible + data tabs (1 batched call instead of 9)
-    clear_tabs = [
-        TAB_CORRECTED,
-        TAB_SIS,
-        TAB_APPROVED,
-        TAB_ADDITIONS,
-        TAB_UNENROLL,
-        TAB_REJECTED,
-        "_CorrData",
-        "_SISData",
-        "_Lists",
-    ]
+    # Clear visible + data tabs (1 batched call instead of 9).
+    # v2.7.3: Sheet 6 (Rejected Changes) is cleared as A:N to PRESERVE col O
+    # ("Reason for Rejection"). Col O is hydrated from _RejectedData col O by
+    # `_hydrate_rejection_reasons` below — reasons live in _RejectedData (keyed
+    # by student_id) so they survive QUERY row reorders. Pre-v2.7.3 cleared A:Z
+    # which silently wiped every IM-typed reason on every hourly cron.
+    clear_ranges = {
+        TAB_CORRECTED: "A:Z",
+        TAB_SIS: "A:Z",
+        TAB_APPROVED: "A:Z",
+        TAB_ADDITIONS: "A:Z",
+        TAB_UNENROLL: "A:Z",
+        TAB_REJECTED: "A:N",  # v2.7.3: preserve col O (Reason for Rejection)
+        "_CorrData": "A:Z",
+        "_SISData": "A:Z",
+        "_Lists": "A:Z",
+    }
     _retry_api(
         lambda: sheets_service.spreadsheets()
         .values()
         .batchClear(
             spreadsheetId=sid,
-            body={"ranges": [f"'{t}'!A:Z" for t in clear_tabs]},
+            body={"ranges": [f"'{t}'!{r}" for t, r in clear_ranges.items()]},
         )
         .execute()
     )
@@ -1313,6 +1409,10 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
             .batchUpdate(spreadsheetId=sid, body={"requests": b})
             .execute()
         )
+
+    # v2.7.3: hydrate Sheet 6 col O ("Reason for Rejection") from _RejectedData
+    # col O so reasons survive the QUERY rebuild + row reorders.
+    _hydrate_rejection_reasons(sheets_service, sid)
 
     print(f"  Done — {len(corrections_map)} students written to corrections sheet.")
 

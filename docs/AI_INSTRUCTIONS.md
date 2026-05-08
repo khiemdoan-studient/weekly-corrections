@@ -15,11 +15,12 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | File | Lines | Purpose |
 |------|-------|---------|
 | `generate_corrections.py` | ~470 | Main orchestrator: auth, read MAP, query BQ + Timeback, compare, filter recently-handled, write. v2.7.0: `read_combined_sis_data` merges alpha_roster + Timeback OneRoster results. |
+| `restore_rejection_reasons.py` | ~220 | One-time restore tool. v2.7.4: reads pre-wipe XLSX export (from Sheets Version History) and upserts recovered reasons into the dedicated `_RejectionReasons` tab (2 cols: sid, reason). `--force` overwrites existing non-blanks. Idempotent (safe to re-run). |
 | `config.py` | ~110 | Constants, header mappings, campus list, sheet IDs. v2.7.0: adds `TIMEBACK_CAMPUSES` + `TIMEBACK_CREDS_PATH`. |
 | `queries.py` | ~30 | Single BQ query function for alpha_roster |
 | `timeback_sis.py` | ~210 | v2.7.0: OneRoster API bridge. OAuth2 + GET /schools/{id}/students. `query_timeback_enrolled()` returns dict shaped like alpha_roster. Self-contained — does NOT depend on sibling `timeback-data-pipeline/oneroster_client.py` (intentional duplication; document any drift). |
-| `sheets_writer.py` | ~850 | Sheets API: hidden tabs, QUERY formulas, title/caption, filters, format |
-| `Code.js` | ~370 | Apps Script source at repo root: onEdit accept/reject routing, clear on filter change. Auto-deployed via clasp (was `apps_script/Code.gs` pre-v2.6.0). |
+| `sheets_writer.py` | ~920 | Sheets API: hidden tabs, QUERY formulas, title/caption, filters, format. v2.7.4: per-tab `clear_ranges` dict (Sheet 6 narrowed to A:N) + `_hydrate_rejection_reasons` populates Sheet 6 col O from the dedicated `_RejectionReasons` tab on each rebuild. |
+| `Code.js` | ~440 | Apps Script source at repo root: onEdit accept/reject routing (Sheet 1), Reason-for-Rejection bridge (Sheet 6 col O → `_RejectionReasons`, v2.7.4 via `upsertRejectionReason_`), clear on filter change. Auto-deployed via clasp (was `apps_script/Code.gs` pre-v2.6.0). |
 | `appsscript.json` | ~7 | Apps Script manifest (TZ America/New_York, V8 runtime). Pushed alongside Code.js by clasp. |
 | `.claspignore` | ~22 | clasp whitelist: ignores everything by default, only Code.js + appsscript.json get pushed. Prevents accidental push of Python tooling, docs, or `.claude/` config. |
 | `package.json` | ~16 | npm deploy scripts: `npm run deploy` runs `node --check Code.js` + `clasp push`. Also exposes `pull`, `push`, `open`. |
@@ -52,6 +53,7 @@ Note: `sheets_writer.py` and `generate_weekly_snapshot.py` previously had per-fi
 - `_AdditionsData` — Cumulative approved roster additions (14 cols, same layout)
 - `_UnenrollData` — Cumulative approved unenrollments (14 cols, same layout)
 - `_RejectedData` — Cumulative rejected changes (14 cols, same layout)
+- `_RejectionReasons` — v2.7.4: dedicated 2-col tab (`student_id`, `reason`) for persistent storage of "Reason for Rejection". Decoupled from the 4 cumulative tabs to survive `_realign_row` truncation, `_backfill_mismatch_summary` clear, `removeStudentFromCumulativeTabs_` deletion on Reject toggle, and any other `_RejectedData` rebuild path.
 
 ### Sheet 1: "Corrected Roster Info" (MAP data + accept/reject checkboxes)
 | Row | Content |
@@ -88,7 +90,22 @@ Same title/caption/filter/sort rows. SORT(QUERY()) formula in A7 pulls from hidd
 - Sheet 5 "Roster Unenrollments" — reads `_UnenrollData` ("Unenrolling" type)
 
 ### Sheet 6: "Rejected Changes" (15 cols: Date + Mismatch Summary + 12 fields + Reason)
-Same as Sheets 3-5 but with extra "Reason for Rejection" column (col O, blank for manual entry). QUERY reads `_RejectedData` A:N (14 cols); Reason is outside QUERY output.
+Same as Sheets 3-5 but with extra "Reason for Rejection" column (col O, manual entry). QUERY reads `_RejectedData` A:N (14 cols); Reason is outside QUERY output and persisted separately in a dedicated tab.
+
+**v2.7.4 architecture — Reason persistence (separate-tab storage)**: col O on Sheet 6 is user-editable. The reason itself lives in a dedicated hidden tab `_RejectionReasons` (2 cols: `student_id`, `reason`). Decoupled from the 4 cumulative tabs.
+
+Two-way bridge:
+- **Write path**: `Code.js::handleRejectionReasonEdit_` fires on Sheet 6 col O edits. Calls `upsertRejectionReason_(ss, studentId, reason)` which finds-or-appends in `_RejectionReasons`.
+- **Read path**: each pipeline run, `sheets_writer.py::_hydrate_rejection_reasons` reads `_RejectionReasons` A:B and writes Sheet 6 col O aligned to the QUERY-rendered student_id order in col M.
+
+Why a separate tab (the v2.7.4 fix): pre-v2.7.4 stored reasons in `_RejectedData` col O. That left them exposed to 3 destructive paths:
+- `_realign_row` truncates rows to 14 cols when migration runs
+- `_backfill_mismatch_summary` clears `_RejectedData` A:Z and rewrites with 14-col rows
+- `removeStudentFromCumulativeTabs_` deletes the `_RejectedData` row on Reject checkbox toggle (uncheck → recheck silently lost the reason)
+
+`_RejectionReasons` is touched by NO existing rebuild path. Reasons survive Reject toggles, migrations, backfills, and pipeline rebuilds.
+
+`_RejectedData` reverts to 14 cols (no Reason col). The 11 v2.7.3-era reasons stored on `_RejectedData` col O are dead-data after the v2.7.4 migration — harmless, never read by v2.7.4 code.
 
 ### Real-Time Unenroll Queue (Live) Sheet
 A 7th visible sheet in the corrections spreadsheet that shows IM-flagged students from all 9 campuses in real-time (~1 min latency). Built by `build_unenroll_queue.py`.
@@ -569,7 +586,7 @@ Architectural notes:
 - **Grade sorts lexicographically** — "10" sorts before "2" because QUERY treats grades as text. Numeric sorting would require a helper column.
 - **Cumulative hidden tabs grow indefinitely** — `_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData` are never cleared. Manual cleanup needed periodically.
 - **Banding covers 200 data rows** — Alternating row colors extend to row 206. If cumulative sheets exceed 200 approved rows, increase the `end_row` floor in `_format_visible_sheet()`.
-- **Reason for Rejection column not in QUERY output** — Sheet 6 QUERY reads from `_RejectedData` A:M (13 cols). The "Reason for Rejection" header is in col N (col 14) but the column content is manually entered by IMs, not populated by QUERY.
+- **Reason for Rejection column not in QUERY output** — Sheet 6 QUERY reads `_RejectedData` A:N (14 cols). The "Reason for Rejection" header is in col O (col 15) and is populated as follows (v2.7.4): (1) IMs type into Sheet 6 col O directly; (2) `Code.js::handleRejectionReasonEdit_` calls `upsertRejectionReason_` which writes (sid, reason) into the dedicated `_RejectionReasons` tab (2 cols, decoupled from cumulative tabs); (3) `sheets_writer.py::_hydrate_rejection_reasons` writes Sheet 6 col O on each rebuild by reading `_RejectionReasons` A:B and matching against Sheet 6 col M (student_id) in QUERY-rendered row order. v2.7.4 moved storage from `_RejectedData` col O (v2.7.3) to `_RejectionReasons` to also survive `_realign_row` truncation, `_backfill_mismatch_summary` clear, and `removeStudentFromCumulativeTabs_` Reject-toggle deletion.
 - **Row-stamp race**: The stamping pass uses row numbers captured during the
   earlier read pass. If `Code.js::removeStudentFromCumulativeTabs_`
   deletes a row from a cumulative tab between the snapshot's read (~T) and

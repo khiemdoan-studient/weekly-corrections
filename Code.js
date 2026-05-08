@@ -1,5 +1,5 @@
 /**
- * Automated Weekly Corrections — Apps Script (v2.6.0)
+ * Automated Weekly Corrections — Apps Script (v2.7.4)
  *
  * Source of truth: this file in the repo. Deployed to the Apps Script
  * project bound to the corrections spreadsheet via clasp:
@@ -23,6 +23,12 @@
  *     student only appears in one cumulative tab at a time (the latest state)
  *   - PRE-FORMATTED dates: eliminates race condition on concurrent checkbox edits
  *   - PRESERVES col A (green) + col B (red) backgrounds — only greys/clears data cols C:O
+ *
+ * FEATURE 1b (v2.7.4): Reason for Rejection bridge (onEdit)
+ *   - Active when current sheet is "Rejected Changes" and edit is at col O (15) row 7+
+ *   - UPSERTS typed Reason into dedicated `_RejectionReasons` tab (sid, reason),
+ *     decoupled from `_RejectedData` so reasons survive Reject toggles + migrations
+ *   - Pairs with Python pipeline's hydration step in sheets_writer.py
  *
  * FEATURE 2: Student Cards generator (onOpen menu)
  *   - Active only when current sheet has a "Copy of MAP Roster" tab (i.e. ISRs)
@@ -55,6 +61,13 @@ function onEdit(e) {
   var range = e.range;
   var sheet = range.getSheet();
   var sheetName = sheet.getName();
+
+  // v2.7.3: Sheet 6 col O ("Reason for Rejection") edits mirror to
+  // _RejectedData col O so reasons survive QUERY rebuilds.
+  if (sheetName === "Rejected Changes") {
+    handleRejectionReasonEdit_(e);
+    return;
+  }
 
   // Only handle edits on the corrections sheet; no-op everywhere else
   if (sheetName !== "Corrected Roster Info") return;
@@ -166,6 +179,73 @@ function removeStudentFromCumulativeTabs_(ss, studentId) {
       }
     }
   }
+}
+
+/**
+ * v2.7.4: Mirror an edit to Sheet 6 col O ("Reason for Rejection") into
+ * a dedicated `_RejectionReasons` tab (2 cols: student_id, reason).
+ *
+ * Why a separate tab: v2.7.3 stored reasons in `_RejectedData` col O,
+ * which was vulnerable to:
+ *   - `_migrate_cumulative_tabs` truncating rows to 14 cols
+ *   - `_backfill_mismatch_summary` clear-and-rewrite
+ *   - `removeStudentFromCumulativeTabs_` deleting the row on Reject toggle
+ *
+ * v2.7.4 puts reasons in their own tab that no rebuild path touches.
+ * Reasons survive Reject toggles, migrations, and pipeline rebuilds.
+ *
+ * Behavior:
+ *   - Read student_id from Sheet 6 col M same row
+ *   - UPSERT into `_RejectionReasons`:
+ *     - If a row with that student_id exists, update col B
+ *     - Else, append a new row [student_id, reason]
+ *   - Tab is auto-created (hidden) if missing
+ *
+ * No-op cases (silent): edit outside col O, header/title rows, blank
+ * student_id.
+ */
+function handleRejectionReasonEdit_(e) {
+  var range = e.range;
+  var row = range.getRow();
+  var col = range.getColumn();
+
+  // Only react to col O (Reason for Rejection) on data rows
+  if (col !== 15) return;
+  if (row <= 6) return;
+
+  var sheet = range.getSheet();
+  var ss = e.source || SpreadsheetApp.getActiveSpreadsheet();
+
+  var studentId = String(sheet.getRange(row, 13).getValue() || "").trim();
+  if (!studentId) return;
+
+  var newReason = String(range.getValue() || "");
+  upsertRejectionReason_(ss, studentId, newReason);
+}
+
+/**
+ * v2.7.4: find-or-append (student_id, reason) in `_RejectionReasons`.
+ * Tab schema: col A = student_id, col B = reason. No header row.
+ * Tab is hidden on creation.
+ */
+function upsertRejectionReason_(ss, studentId, reason) {
+  if (!studentId) return;
+  var tab = ss.getSheetByName("_RejectionReasons");
+  if (!tab) {
+    tab = ss.insertSheet("_RejectionReasons");
+    tab.hideSheet();
+  }
+  var lastRow = tab.getLastRow();
+  if (lastRow >= 1) {
+    var sids = tab.getRange(1, 1, lastRow, 1).getValues();
+    for (var i = 0; i < sids.length; i++) {
+      if (String(sids[i][0] || "").trim() === String(studentId).trim()) {
+        tab.getRange(i + 1, 2).setValue(reason);
+        return;
+      }
+    }
+  }
+  tab.appendRow([studentId, reason]);
 }
 
 // ═════════════════════════════════════════════════════════════════════════
