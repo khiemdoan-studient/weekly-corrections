@@ -66,19 +66,20 @@ Note: `sheets_writer.py` and `generate_weekly_snapshot.py` previously had per-fi
 | 6 | Column headers: Accept Changes, Reject Changes, Campus, Grade, ... Mismatch Summary (navy, bold white) |
 | 7+ | SORT(QUERY()) formula in C7 (filtered + sorted from _CorrData), checkboxes in A7+ (green) and B7+ (red) |
 
-### Row-Hiding on Sheet 1 (v2.4.4)
-After v2.4.4, Sheet 1 ("Corrected Roster Info") does NOT include students whose `student_id` appears in any cumulative tab (`_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData`) with a timestamp within the last `HIDE_HANDLED_DAYS` days (default 7). Pipeline flow:
+### Row-Hiding on Sheet 1 (v2.7.5 — tuple-based, no time cutoff)
+Sheet 1 ("Corrected Roster Info") does NOT include any current correction whose `(student_id, mismatch_summary)` tuple has ever appeared in any cumulative tab (`_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData`). No date cutoff. Pipeline flow:
 1. `compare_students` returns ALL current mismatches (unchanged)
-2. `main()` reads handled IDs via `read_handled_student_ids(sheets_service, HIDE_HANDLED_DAYS)`
-3. `_hide_recently_handled(corrections_map, corrections_sis, handled_ids)` filters parallel lists
-4. Filtered lists are passed to `write_corrections` → `_CorrData` only contains unhandled students → Sheet 1 QUERY output shrinks
+2. `main()` reads handled tuples via `read_handled_student_keys(sheets_service)` — reads col B (mismatch_summary) + col M (student_id) from each cumulative tab into a set
+3. `_hide_handled(corrections_map, corrections_sis, handled_keys)` filters parallel lists by tuple membership
+4. Filtered lists are passed to `write_corrections` → `_CorrData` only contains never-actioned-or-new-mismatch students → Sheet 1 QUERY output shrinks
 
-Hide-then-reappear semantics:
-- Accepted/rejected student's timestamp < 7 days old → excluded from `_CorrData` → not on Sheet 1
-- After 7 days, if mismatch still exists in MAP vs SIS → student reappears on Sheet 1 (signal: correction is stale, data team hasn't processed)
-- After 7 days, if SIS updated → student naturally absent (no mismatch to flag)
+Semantics:
+- Same student + same mismatch_summary as previously actioned → HIDDEN permanently
+- Same student + DIFFERENT mismatch_summary (e.g. new field surfaced) → VISIBLE (a new tuple, never handled)
+- Student no longer mismatches in MAP vs SIS → naturally absent
+- To force a previously-handled student back onto Sheet 1: delete their row from the relevant cumulative tab via the Apps Script editor
 
-Timestamp parsing: `datetime.strptime(row[0].strip(), "%Y-%m-%d %H:%M:%S")`. Rows with unparseable timestamps (e.g. legacy `4/23/2026` format from pre-v2.4.2 races) are silently skipped — treated as unhandled. `normalize_dates.py` should be run if there's a mix.
+Pre-v2.7.5 used `HIDE_HANDLED_DAYS = 7` and matched by bare `student_id`. The 7-day window forced previously-handled students to reappear (the rationale was "remind IMs about stale corrections") but in practice IMs were confused. v2.7.5 drops the date cutoff entirely — also eliminates the pre-v2.4.2-era unparseable-timestamp silent-skip bug class.
 
 ### Sheet 2: "Current Roster Info in SIS" (same layout, no checkboxes)
 Same title/caption/filter/sort rows. SORT(QUERY()) formula in A7 pulls from `_SISData`.
@@ -414,7 +415,7 @@ Colors are applied via conditional formatting rules on the Mismatch Summary colu
 
 ## Configuration Constants
 
-- `HIDE_HANDLED_DAYS = 7` in `config.py` — Tunable window for row-hiding on Sheet 1. Set to 0 to disable and restore always-show-everything behavior.
+- Row-hiding on Sheet 1 (v2.7.5): no time cutoff. Hide if `(student_id, mismatch_summary)` exists in any cumulative tab. To re-enable the legacy 7-day window: re-introduce `HIDE_HANDLED_DAYS` and the time-bounded `read_handled_student_keys` variant.
 
 ### Weekly Snapshot Constants (v2.5.0)
 
@@ -452,7 +453,7 @@ outages get longer:
 7. **Three-level unenroll chain** — IM checks SR checkbox → formula mirrors to MR → IMPORTRANGE pushes to CMR → pipeline reads CMR Unenroll via `MAP_HEADER_MAP` auto-detection. No Apps Script needed.
 8. **Hybrid real-time + hourly architecture** — Sheets-only live queue for instant IM feedback (bypass BQ); full pipeline on GitHub Actions hourly schedule for SIS comparison. No pure-Sheets solution exists because Sheets can't query BigQuery.
 9. **Pre-formatted ISO date strings in Code.js** — Instead of `appendRow([new Date(), ...])` + post-write `setNumberFormat`, we pre-compute the date string via `Utilities.formatDate` and append the raw string. This is race-safe under concurrent onEdit triggers (Apps Script can fire multiple concurrent instances when a user toggles multiple checkboxes quickly). onEdit triggers are simple triggers (not installable), fire synchronously per edit, but Google may invoke multiple in parallel when edits happen within milliseconds. Trade-off: the column now stores strings, not serial dates, so numeric date sort relies on the ISO format being lexicographically equivalent to chronological order (it is).
-10. **Hide accepted/rejected rows for 7 days** — Previously, Sheet 1 always showed every current mismatch, including students who had already been Accept'd or Reject'd. After handling, the pipeline rebuild cleared the checkbox but re-pulled the student, which confused IMs ("I already checked this, why is it back?"). v2.4.4 filters out students handled within `HIDE_HANDLED_DAYS`. After the window, if the mismatch still exists, the student reappears — which signals that the data team hasn't processed the correction yet. This behavior aligned with user expectation even though no prior version had implemented it.
+10. **Hide accepted/rejected rows forever by (sid, mismatch) tuple** — v2.4.4 hid for 7 days only, then re-surfaced students whose mismatch persisted. In practice IMs were confused ("I already actioned this batch, why are John Bradley Apostol's students back?"). v2.7.5 drops the time cutoff entirely: any `(student_id, mismatch_summary)` tuple that has ever appeared in a cumulative tab is hidden permanently from Sheet 1. The approval sheets (3/4/5/6) still show the handled rows — the data team's job board is the approval sheets, not Sheet 1. To re-flag a previously-handled student: manually delete their row from the relevant cumulative tab via the Apps Script editor. To catch genuinely-new issues on already-handled students: a NEW different mismatch_summary value (e.g. "Grade" → "Grade, Email" after a new field surfaces) produces a new tuple that is not in handled_keys, so the student resurfaces on Sheet 1.
 11. **Shared Drive for weekly snapshot** — Service accounts have 0 bytes of Drive quota by default. Files created by the SA in its own Drive fail with `storageQuotaExceeded` (HTTP 403). Solution: Shared Drive hosts the weekly files — files there are owned by the drive itself, bypassing user quotas. All Drive API calls that touch the Shared Drive must include `supportsAllDrives=True`; `files.list` additionally needs `driveId=<shared_drive_id>`, `corpora='drive'`, `includeItemsFromAllDrives=True`.
 
 ### 12. Centralized retry strategy (v2.5.2)

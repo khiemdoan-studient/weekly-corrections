@@ -76,8 +76,8 @@ text = (
     "After you check Accept or Reject, here's what happens:\n"
     "\u2022 The data area (cols C\u2013O) greys out to show you've handled it. Cols A (Accept) and B (Reject) stay their permanent green/red \u2014 those column colors never change.\n"
     "\u2022 Within the hour, the next automatic run of the pipeline HIDES that row from \u201cCorrected Roster Info\u201d so you don\u2019t see it again.\n"
-    "\u2022 The row stays hidden for 7 days. If the data team processes the correction within that window, the student never reappears.\n"
-    "\u2022 If the correction is NOT processed within 7 days, the student reappears on Sheet 1 \u2014 this is a signal that something\u2019s overdue. Re-check the box to re-hide and ping the data team.\n"
+    "\u2022 The row stays hidden permanently \u2014 you won\u2019t be re-asked about the same mismatch.\n"
+    "\u2022 If a NEW different mismatch arises for the same student (e.g. you fixed Grade before, but now SIS also has wrong Email), the student reappears on Sheet 1 with the new mismatch summary. Action it as a fresh row.\n"
     "\u2022 The row in the corresponding approval sheet (Sheet 3/4/5/6) is permanent regardless.\n"
     "\n"
     "Important: Do not check boxes for students outside your campus. Only check corrections for "
@@ -224,8 +224,8 @@ text = (
     "is needed. (3) The pipeline only checks on runs \u2014 ask Khiem to run `python generate_corrections.py` "
     "or wait for the next scheduled run.\n"
     "\n"
-    "\u201cA student I accepted/rejected last week is back on Sheet 1\u201d\n"
-    "This is expected. Checked rows hide from Sheet 1 for 7 days, then reappear if the correction still hasn\u2019t been processed by the data team. Re-check your box to re-hide it. If it keeps reappearing week after week, ping Khiem.\n"
+    "\u201cA student I accepted/rejected is back on Sheet 1\u201d\n"
+    "v2.7.5+: this means a NEW different mismatch arose for that student. Look at the Mismatch Summary column \u2014 it\u2019ll show something different from what you previously actioned (e.g. you fixed Grade before, now it shows Grade, Email because Email also mismatches now). Action the new row. If you want to undo your previous action entirely (e.g. you accidentally rejected and want to accept), ping Khiem \u2014 the underlying cumulative tab row needs manual deletion.\n"
     "\n"
     "\u201cThe Accept or Reject column isn\u2019t green/red anymore\u201d\n"
     "Khiem probably needs to re-paste the latest Apps Script. The v2.4.3+ version keeps those column colors permanent; older versions wiped them on every checkbox click. Ping him to re-paste.\n"
@@ -260,8 +260,9 @@ text = (
     "\u2022 When Monday rolls around, Khiem\u2019s automation bundles everything you accepted into the new \u201cM/D Corrections\u201d sheet.\n"
     "\u2022 You don\u2019t need to do anything \u2014 just keep accepting/rejecting on Sheet 1.\n"
     "\n"
-    "If you notice your accepted correction is still showing on Sheet 1 after 7 days, the data team "
-    "hasn\u2019t processed that week\u2019s sheet yet. Check in with Khiem.\n"
+    "If you notice the SAME student STILL appearing on Sheet 1 after you actioned them, look at the Mismatch Summary "
+    "column \u2014 if it\u2019s different from what you previously fixed, that\u2019s a new issue to action. If it\u2019s the same and "
+    "you\u2019ve been seeing it for weeks, ping Khiem to investigate the cumulative-tab state.\n"
 )
 
 requests.append({"insertText": {"location": {"index": 1}, "text": text}})

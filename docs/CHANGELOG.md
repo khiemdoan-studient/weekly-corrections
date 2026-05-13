@@ -1,5 +1,44 @@
 # Changelog
 
+## [v2.7.5] - 2026-05-08
+
+### Changed
+- **Sheet 1 "Corrected Roster Info" now hides previously-handled student-mismatch pairs FOREVER**, not just within a 7-day window. v2.4.4 introduced `HIDE_HANDLED_DAYS = 7` to hide Accept/Reject'd students temporarily — the rationale was "signal IMs about stale corrections" but in practice IMs were confused by previously-actioned students reappearing every 7 days. Most notable example: John Bradley Apostol's students kept resurfacing, IMs kept re-rejecting them.
+- **Re-flag policy**: if a NEW *different* mismatch type arises for a student you've already handled (e.g. fixed Grade last week, now SIS also shows wrong Email → mismatch is now "Grade, Email"), the student WILL reappear on Sheet 1 because the new tuple `(sid, "Grade, Email")` is not in handled_keys. The old `(sid, "Grade")` tuple is still hidden. This catches genuinely new data-quality issues without re-nagging on stale ones.
+
+### How the new logic works
+- `generate_corrections.py::read_handled_student_keys(sheets_service)` reads all 4 cumulative tabs (`_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData`) and collects every `(student_id, mismatch_summary)` tuple — no time cutoff.
+- `generate_corrections.py::_hide_handled(corrections_map, corrections_sis, handled_keys)` filters by tuple membership: a current correction is hidden iff its `(Student_ID, mismatch_summary)` exists in the set.
+- Pre-v2.7.5 only collected `student_id` and matched on that alone (within the 7-day window).
+
+### Removed
+- `config.HIDE_HANDLED_DAYS = 7` — the constant is gone. The comment block in `config.py` explains the v2.7.5 semantics for future reference.
+- `from datetime import datetime, timedelta` in `generate_corrections.py` — no longer needed since handled_keys ignores date entirely. Drops a class of latent bugs (the unparseable-timestamp silent-skip issue from pre-v2.4.2 era).
+
+### Renamed
+- `read_handled_student_ids` → `read_handled_student_keys` (returns tuples now, not bare sids).
+- `_hide_recently_handled` → `_hide_handled` (no longer "recently"; "previously" or "ever").
+
+### Verified
+- `python -m py_compile generate_corrections.py config.py` → OK.
+- Local pipeline run: **Hidden 153 previously-handled student-mismatch pair(s) (235 total handled keys). 5 corrections remain on Sheet 1.** (Prior v2.7.4 run with 7-day window: 200 hidden, 30 remaining.)
+- Spot-check of the 5 remaining: 3 are previously-Reject'd JHES students whose mismatch CHANGED ("Guide Email" → "Guide Email, Guide Name" — additional Guide Name mismatch surfaced after their original rejection). Working as designed: the new mismatch type re-surfaces them. The other 2 are genuinely new (one JHMS Student Group mismatch, one Vita Unenrolling) — neither has ever been handled.
+- Apostol-batch / Lemuel Mosquito / JHES Guide Email-only students from the 2026-05-04 batch: confirmed absent from Sheet 1.
+
+### Cumulative tab safety
+The 4 approval sheets (Sheets 3-6) are unchanged. Every handled row remains on its corresponding approval sheet forever. The data team's job board is still the approval sheets. v2.7.5 only changes when students re-appear on the input sheet (Sheet 1).
+
+### Files changed
+- `generate_corrections.py` — `read_handled_student_keys` + `_hide_handled` rewrites + import cleanup
+- `config.py` — removed `HIDE_HANDLED_DAYS`, added v2.7.5 comment block
+- `docs/CHANGELOG.md` — this entry
+- `docs/AI_INSTRUCTIONS.md` — Row-Hiding section + Key Design Decisions #10 updated
+- `docs/HUMAN_INSTRUCTIONS.md` — "student re-appearing" troubleshooting row updated
+
+### User action required
+- **None.** Next hourly cron picks up the new code.
+- **To force a previously-handled student back onto Sheet 1**: open the relevant cumulative tab via Apps Script editor (the hidden `_ApprovedData` / `_AdditionsData` / `_UnenrollData` / `_RejectedData`) and delete the row for that student. The next pipeline run will re-surface them.
+
 ## [v2.7.4] - 2026-05-08
 
 ### Fixed

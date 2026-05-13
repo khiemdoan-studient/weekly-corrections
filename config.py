@@ -191,15 +191,19 @@ TIMEBACK_CAMPUS_NAMES = {"ScienceSIS", "Vita High School"}
 # secret to this path before invoking generate_corrections.py.
 TIMEBACK_CREDS_PATH = os.path.join(KEYS_DIR, "timeback-creds.json")
 
-# ── Output sheet tab names ──────────────────────────────────────────────────
 # ── Row-hiding behavior ────────────────────────────────────────────────────
-# Students who've been Accept'd or Reject'd within this many days are hidden
-# from Sheet 1 "Corrected Roster Info" on the next pipeline run. This prevents
-# IMs from re-reviewing the same correction while the data team processes it.
-# After HIDE_HANDLED_DAYS elapses, if the mismatch still exists in MAP vs SIS,
-# the student reappears on Sheet 1 (signal that the correction hasn't been
-# processed yet).
-HIDE_HANDLED_DAYS = 7
+# v2.7.5: Sheet 1 ("Corrected Roster Info") hides every (student_id,
+# mismatch_summary) tuple that has previously been actioned (Accept or Reject)
+# — no time cutoff. The pre-v2.7.5 behavior used `HIDE_HANDLED_DAYS = 7` to
+# re-surface handled students after a week as a stale-correction reminder; in
+# practice that confused IMs who had already actioned the row. The approval
+# sheets (3/4/5/6) still show the handled rows indefinitely — they ARE the
+# data team's job board, not Sheet 1.
+#
+# If a NEW *different* mismatch type arises for the same student later, the
+# new tuple is not in handled_keys and the student resurfaces on Sheet 1.
+# To force a previously-handled student back onto Sheet 1, manually delete
+# their row from the relevant cumulative tab via the Apps Script editor.
 
 # ── Output sheet tab names ──────────────────────────────────────────────────
 TAB_CORRECTED = "Corrected Roster Info"
