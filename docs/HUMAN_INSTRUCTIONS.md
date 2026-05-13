@@ -109,7 +109,7 @@ The pipeline now supports **11 campuses** across two SIS systems. The IM workflo
    - The row stays hidden for 7 days. After that, if the correction hasn't been processed by the data team (i.e., SIS still has the wrong value), the student reappears on Sheet 1 — this is a signal that something's overdue.
    - If the correction WAS processed within 7 days, the student's MAP and SIS data now match, so they never reappear.
    - The row in Sheet 3 / 4 / 5 / 6 (approval/rejection sheets) is permanent regardless.
-7. Rejected students appear in **Sheet 6 ("Rejected Changes")** — optionally add a reason in the last column
+7. Rejected students appear in **Sheet 6 ("Rejected Changes")** — optionally add a reason in the last column. Reasons persist across pipeline rebuilds + Reject toggles (v2.7.4 stores them keyed by student_id in a dedicated `_RejectionReasons` tab).
 8. Every Friday, the data team reviews all approval sheets and submits corrections
 
 ## How to Mark a Student for Unenrollment

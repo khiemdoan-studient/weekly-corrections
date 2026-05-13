@@ -114,7 +114,7 @@ text = (
     "\n"
     "Rejected Changes\n"
     "What it shows: A running list of rejected corrections with the date and a Reason for Rejection column.\n"
-    "What you do: After rejecting a row on Sheet 1, go to this sheet and optionally add a reason in the last column.\n"
+    "What you do: After rejecting a row on Sheet 1, go to this sheet and optionally add a reason in the last column. Your typed reason persists across pipeline rebuilds and Reject toggles (stored keyed by student_id).\n"
     "\n"
     "PART 3: DROPDOWN FILTERS AND SORTING\n"
     "\n"

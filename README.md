@@ -88,9 +88,10 @@ The `alpha_roster` BQ table must exist. It is created by step 11b of `Refresh-Da
 - **Sheet 5 "Roster Unenrollments"** — Cumulative list of approved unenrollments.
 - **Sheet 6 "Rejected Changes"** — Cumulative list of rejected corrections with Reason for Rejection column.
 
-### Hidden Tabs (7)
+### Hidden Tabs (8)
 - `_CorrData`, `_SISData`, `_Lists` — Source data for QUERY formulas (rebuilt each run)
 - `_ApprovedData`, `_AdditionsData`, `_UnenrollData`, `_RejectedData` — Cumulative history (14-col format: Date, MismatchSummary, 12 fields)
+- `_RejectionReasons` — v2.7.4: 2-col store (`student_id`, `reason`) for Sheet 6's "Reason for Rejection". Decoupled from `_RejectedData` so reasons survive Reject toggles + pipeline rebuilds.
 
 ## Workflow
 
