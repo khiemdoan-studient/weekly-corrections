@@ -28,6 +28,32 @@
 ### Cumulative tab safety
 The 4 approval sheets (Sheets 3-6) are unchanged. Every handled row remains on its corresponding approval sheet forever. The data team's job board is still the approval sheets. v2.7.5 only changes when students re-appear on the input sheet (Sheet 1).
 
+### Data-loss audit (post-deploy)
+After the 50+ → 5 transition on Sheet 1 raised the obvious "did we lose data?" question, ran a comprehensive read of every tab:
+
+| Tab | Row count | Note |
+|---|---|---|
+| `_ApprovedData` | 86 | preserved |
+| `_AdditionsData` | 44 | preserved |
+| `_UnenrollData` | 48 | preserved |
+| `_RejectedData` | 59 | preserved |
+| `_RejectionReasons` | 11 | preserved |
+| `_CorrData` | 5 | only the new-mismatch/never-handled students |
+| Sheet 3 "Automated Correction List" | 86 | matches `_ApprovedData` |
+| Sheet 4 "Roster Additions" | 44 | matches `_AdditionsData` |
+| Sheet 5 "Roster Unenrollments" | 48 | matches `_UnenrollData` |
+| Sheet 6 "Rejected Changes" | 59 | matches `_RejectedData` |
+
+**Total handled tuples**: 235. **Distinct student_ids**: 235. All sampled tuples found in handled_keys. The 5 visible students on Sheet 1 all have either a NEW mismatch_summary value (different from what they were previously actioned for) or have never been handled — verified by cross-referencing each sid against `sid_to_mismatches` map.
+
+**Conclusion: NO DATA LOSS.** Every previously-actioned correction is preserved on the corresponding approval sheet (3/4/5/6). Reasons preserved in `_RejectionReasons`. The Sheet 1 transition is purely the intentional v2.7.5 hide-forever behavior.
+
+### Minor finding: 2 cross-tab duplicate-tuple sids (cosmetic only)
+- `079-10545` Bader Sammoud — appears in BOTH `_AdditionsData` (Accept'd 2026-05-07 12:07:32) AND `_RejectedData` (Reject'd 10 min later, 12:17:31) with the same `Roster Addition` mismatch. Should have been deduped by `Code.js::removeStudentFromCumulativeTabs_` on toggle. Likely cause: race condition or pre-v2.6.0 manual-paste-era Apps Script ran without the dedup.
+- `083-11566` — TWO entries in `_UnenrollData` with same `Unenrolling` mismatch, dates 2026-05-04 and 2026-05-13. Same root cause.
+
+Functional impact: NONE. handled_keys is a `set` of tuples — duplicates collapse. Both sids are correctly hidden from Sheet 1. The duplicate rows are cosmetic cruft on the approval sheets, will appear as a duplicate visual row on Sheet 4/5/6 respectively. Optional cleanup: delete the older row manually via Apps Script editor. Not auto-fixing — too risky to write a dedup pass when there's no functional impact.
+
 ### Files changed
 - `generate_corrections.py` — `read_handled_student_keys` + `_hide_handled` rewrites + import cleanup
 - `config.py` — removed `HIDE_HANDLED_DAYS`, added v2.7.5 comment block

@@ -574,7 +574,7 @@ Architectural notes:
 | Live Queue shows `#REF!` or empty | IMPORTRANGE needs one-time human auth in the destination spreadsheet | User opens the tab and clicks 'Allow access' on the prompt |
 | Inconsistent date formats in cumulative tabs | Apps Script race: `setNumberFormat(getLastRow(), 1)` fired by concurrent onEdit triggers applies to wrong row, leaving some rows in locale default (`4/23/2026 1:37:44`) and others in ISO (`2026-04-23 01:37:44`). Breaks chronological sort. | `Code.js` now pre-formats the date as ISO string via `Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss")` BEFORE appendRow, eliminating the race. For historical data: `normalize_dates.py` migrates existing rows. |
 | Accept/Reject col A/B colors missing after checkbox click | Pre-v2.4.3 `Code.js` called `setBackground(null)` on cols 1–15, wiping the permanent `#D4EDDA` / `#FEE2E2` applied by `sheets_writer.py`. Pipeline run re-applies them, but Apps Script wipes them again on next click. | v2.4.3+ `Code.js` only touches cols 3–15 (C:O), leaving A/B untouched. Auto-deployed via clasp post-v2.6.0; manual re-paste is no longer required. |
-| Handled students keep reappearing on Sheet 1 | Pipeline had no handled-state tracking. | v2.4.4 `read_handled_student_ids` + `_hide_recently_handled` exclude them. |
+| Handled students keep reappearing on Sheet 1 | Pipeline had no handled-state tracking. | v2.4.4 added 7-day hide window. v2.7.5 superseded with `read_handled_student_keys` + `_hide_handled` (tuple-based, no time cutoff) — hides forever unless a NEW different mismatch type arises for the same student. |
 | `UnicodeEncodeError: 'charmap' codec can't encode '->'` | `generate_weekly_snapshot.py` print statements | Windows cp1252 console doesn't support U+2192 (`->`) or U+2500 (`-`) box-drawing chars | Use ASCII `->` and `-` in print statements. Em-dash `—` (U+2014) works fine in cp1252. |
 | `addBanding: You cannot add alternating background colors to a range that already has alternating background colors` | Re-run of `generate_weekly_snapshot.py` same week | `addBanding` isn't idempotent — errors if range already banded | In `main()`, fetch existing bandings via `spreadsheets.get(fields="sheets(properties.sheetId,bandedRanges)")` and queue `deleteBanding` requests BEFORE the new `addBanding` requests in the same batchUpdate. |
 | `deleteSheet: You can't remove all the visible sheets` when 0 unsent rows for the week (deeper issue caught after v2.5.0's `addBanding` fix) | In `generate_weekly_snapshot.py::main()`, old order was: create-file -> read-cumulative -> if all 3 weekly tabs empty, hide all + delete Sheet1 -> Google Sheets rejects (0 visible tabs not allowed) | v2.5.1: restructured to read cumulative tabs FIRST. If `total_rows == 0`, log and exit before any file is created. If a file already exists from a prior run, leave it untouched. |
@@ -600,3 +600,12 @@ Architectural notes:
   `files.update(trashed=true)` but NOT `files.delete()`. To permanently
   delete an orphan, either escalate the SA to Manager role or wait for
   Shared Drive's auto-empty policy.
+- **Cumulative-tab dedup race on checkbox toggle**: `Code.js::removeStudentFromCumulativeTabs_`
+  is supposed to delete the student's existing row from every cumulative tab before
+  Apps Script appends the new one. Under rapid clicks (e.g. Accept → uncheck → Reject
+  within seconds) or pre-v2.6.0 manual-paste eras, a duplicate row can land in two
+  cumulative tabs for the same student. Audited 2026-05-08: 2 such cases out of 235
+  total handled keys. Functional impact: NONE — v2.7.5's `handled_keys` is a `set`
+  of (sid, mismatch) tuples, so duplicates collapse. The visible approval sheet
+  (3/4/5/6) shows a duplicate visual row, which is cosmetic cruft. Manual cleanup:
+  open the cumulative tab via Apps Script editor and delete the older row.
