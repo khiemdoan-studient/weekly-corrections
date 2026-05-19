@@ -32,7 +32,7 @@ Students with mismatched data appear in a corrections spreadsheet for manager re
 | `build_unenroll_queue.py` | ~250 | One-time: create/refresh "Unenroll Queue (Live)" tab on corrections sheet with per-campus QUERY+IMPORTRANGE formulas. Idempotent. |
 | `.github/workflows/hourly-pipeline.yml` | ~40 | GitHub Actions cron: runs `generate_corrections.py` every hour at :00 UTC. Uses `GCP_SA_KEY` secret. |
 | `normalize_dates.py` | ~130 | One-time: normalize date column A in cumulative tabs to canonical `yyyy-MM-dd HH:mm:ss`. Idempotent. Handles both `M/D/YYYY H:MM:SS` and ISO inputs. |
-| `generate_weekly_snapshot.py` | ~1000 | Weekly orchestrator: compute Monday ET, find/create sheet in Shared Drive, filter by Sent Week col, write 3 tabs, stamp sent rows. v2.6.1: `--all-unsent` flag adds an Instructions tab pinned at index 0 for ad-hoc support packets. |
+| `generate_weekly_snapshot.py` | ~1070 | Weekly orchestrator: compute Monday ET, find/create sheet in Shared Drive, filter by Sent Week col, write 3 tabs, stamp sent rows. v2.6.1: `--all-unsent` flag adds an Instructions tab pinned at index 0 for ad-hoc support packets. v2.7.6: `--since YYYY-MM-DD --name TITLE` date-range export. Filters by Date Approved (col A), no stamping, no Instructions tab. |
 | `add_sent_week_column.py` | ~100 | Pre-flight sanity check for Sent Week col O on cumulative tabs. Reports row counts + blank/sent/malformed state. Safe to re-run. |
 | `.github/workflows/weekly-snapshot.yml` | ~50 | GitHub Actions cron: `0 11 * * 1` (Mon 07:00 ET) + workflow_dispatch. Uses GCP_SA_KEY secret. |
 | `retry_helper.py` | ~120 | Shared retry helper for transient Google API errors. Used by sheets_writer, generate_weekly_snapshot, generate_corrections, and all 4 helper scripts. 5 attempts, exponential backoff (1s/2s/4s/8s/16s), 25% jitter, transient-only catch (HttpError 5xx/429/408 + TimeoutError + socket.timeout + ConnectionError). |
@@ -194,6 +194,37 @@ accepted corrections.
 Default mode has NO Instructions tab. Adding the tab on the regular
 Monday cron would be noisy (3 tabs stay simpler for routine use); it's
 opt-in for ad-hoc support handoffs only.
+
+### Date-range export mode (v2.7.6)
+
+`python generate_weekly_snapshot.py --since YYYY-MM-DD --name "TITLE"`
+produces a consolidated multi-week snapshot, distinct from the per-week
+files:
+
+- **Filter dimension**: `filter_since_date()` includes rows whose
+  **Date Approved (col A)** is on or after the `--since` date. This is the
+  only mode that filters by col A. Default and `--all-unsent` filter by
+  col O (Sent Week). `_parse_date_approved()` handles the canonical
+  `YYYY-MM-DD HH:MM:SS` plus legacy `M/D/YYYY` and date-only variants.
+- **`--since` is inclusive** of the given day. To get "strictly after
+  5/4", pass `--since 2026-05-05`.
+- **No Sent Week stamping**: the stamping block is wrapped in
+  `if since_date is None:`. The selected rows keep their original
+  per-week Sent Week values. Re-stamping would corrupt that history and
+  break future default-mode runs. `--since` is a pure read-only
+  re-export; the cumulative tabs are never written.
+- **No Instructions tab**: the Instructions tab is gated on `all_unsent`,
+  which stays False. 3 data tabs only (Correction List, Roster
+  Additions, Roster Unenrollments).
+- **File name**: `--name` is the literal Shared Drive filename (the
+  `M/D Corrections` auto-name does not apply). `--since` requires
+  `--name`, and is mutually exclusive with `--all-unsent`. argparse
+  validates both.
+- **Idempotent**: re-running with the same `--name` updates that file
+  in place (find-or-create by exact name). Safe to re-run because there's
+  no stamping.
+- First use (v2.7.6): `--since 2026-05-05 --name "5/19 Corrections"`
+  produced 77 + 44 + 47 = 168 rows; file id `1BXCdHyRQhUtL4y4oEYfVD6hz4_uDRynqaBG8AqJ5sqM`.
 
 ## Timeback SIS bridge (v2.7.0)
 

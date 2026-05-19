@@ -42,9 +42,22 @@ Design notes
   current Monday) AND newly-accepted unsent rows, so the snapshot always
   reflects the full week up to now.
 
+Modes
+-----
+- Default (no flags): the Monday-cron behavior described above.
+- --all-unsent (v2.6.1): support-packet mode. Every blank-Sent-Week row
+  across all weeks, plus an Instructions tab.
+- --since YYYY-MM-DD --name TITLE (v2.7.6): date-range export. Every row
+  whose Date Approved (col A) is on or after the given date, into a file
+  named TITLE. Filters on Date Approved (col A), NOT Sent Week (col O), and
+  does NOT stamp the cumulative tabs (read-only re-export). Use for a
+  consolidated multi-week view that doesn't disturb the per-week history.
+
 Usage
 -----
     python generate_weekly_snapshot.py
+    python generate_weekly_snapshot.py --all-unsent
+    python generate_weekly_snapshot.py --since 2026-05-05 --name "5/19 Corrections"
 """
 
 import argparse
@@ -223,6 +236,45 @@ def filter_for_week(rows, current_monday_iso, sent_week_col, all_unsent=False):
             include = (not sent) or (sent == current_monday_iso)
         if include:
             # Also skip truly empty rows (no Date, no Campus)
+            if str(row[0] or "").strip() or str(row[2] or "").strip():
+                selected.append((row_num, row))
+    return selected
+
+
+def _parse_date_approved(date_str):
+    """Parse a cumulative-tab col-A 'Date Approved' value into a date.
+
+    Handles the canonical 'YYYY-MM-DD HH:MM:SS' plus legacy 'M/D/YYYY ...'
+    variants and date-only forms (the H may be single-digit; strptime's %H
+    accepts that). Returns a datetime.date, or None if blank/unparseable.
+    """
+    s = str(date_str or "").strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M:%S", "%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def filter_since_date(rows, since_date):
+    """Return subset of (row_num, row) whose Date Approved (col A) calendar-day
+    is >= since_date.
+
+    Used by the v2.7.6 --since date-range export mode. Filters on col A
+    (Date Approved), NOT col O (Sent Week), so it re-exports corrections by
+    approval date regardless of whether they've already been sent. Rows with
+    a blank/unparseable col A are skipped.
+    """
+    selected = []
+    for row_num, row in rows:
+        d = _parse_date_approved(row[0] if row else "")
+        if d is None:
+            continue
+        if d >= since_date:
+            # Skip truly empty rows (same guard as filter_for_week)
             if str(row[0] or "").strip() or str(row[2] or "").strip():
                 selected.append((row_num, row))
     return selected
@@ -635,20 +687,30 @@ def _instructions_format_requests(sheet_id, rows):
 # ── Main ───────────────────────────────────────────────────────────────────
 
 
-def main(all_unsent=False):
+def main(all_unsent=False, since_date=None, custom_name=None):
     start = time.time()
     print("=" * 70)
-    if all_unsent:
+    if since_date is not None:
+        print("  WEEKLY SNAPSHOT - DATE-RANGE EXPORT MODE (--since)")
+    elif all_unsent:
         print("  WEEKLY SNAPSHOT — SUPPORT PACKET MODE (--all-unsent)")
     else:
         print("  WEEKLY SNAPSHOT — corrections bundle for support")
     print("=" * 70)
 
     monday_date, monday_label, monday_iso = compute_monday(WEEKLY_TIMEZONE)
-    sheet_name = f"{monday_label} Corrections"
+    if since_date is not None:
+        sheet_name = custom_name
+    else:
+        sheet_name = f"{monday_label} Corrections"
     print(f"  Current Monday ({WEEKLY_TIMEZONE}): {monday_iso}")
     print(f"  Target sheet name: '{sheet_name}'")
-    if all_unsent:
+    if since_date is not None:
+        print(
+            f"  Filter mode: SINCE {since_date.isoformat()} "
+            f"(Date Approved col A >= this date; Sent Week NOT stamped)"
+        )
+    elif all_unsent:
         print(
             f"  Filter mode: ALL UNSENT (any row with blank Sent Week, "
             f"regardless of week)"
@@ -679,11 +741,19 @@ def main(all_unsent=False):
         rows = read_cumulative_tab(
             sheets, OUTPUT_SPREADSHEET_ID, source_tab, SENT_WEEK_COL
         )
-        filtered = filter_for_week(
-            rows, monday_iso, SENT_WEEK_COL, all_unsent=all_unsent
-        )
+        if since_date is not None:
+            filtered = filter_since_date(rows, since_date)
+        else:
+            filtered = filter_for_week(
+                rows, monday_iso, SENT_WEEK_COL, all_unsent=all_unsent
+            )
         collected[weekly_tab] = filtered
-        scope_label = "unsent (all-time)" if all_unsent else "selected for this week"
+        if since_date is not None:
+            scope_label = f"Date Approved >= {since_date.isoformat()}"
+        elif all_unsent:
+            scope_label = "unsent (all-time)"
+        else:
+            scope_label = "selected for this week"
         print(
             f"    {source_tab} -> {weekly_tab}: "
             f"{len(rows)} total, {len(filtered)} {scope_label}"
@@ -881,68 +951,79 @@ def main(all_unsent=False):
     # deleted/shifted rows since then, which would cause stale row numbers
     # to land on the WRONG row. Re-reading col M (Student_ID) right before
     # stamping shrinks the race window from ~5s to ~milliseconds.
-    print("\n  Marking selected rows with Sent Week...")
-    col_letter = _col_letter(SENT_WEEK_COL)
-    SID_COL_INDEX = 12  # col M = Student_ID (0-indexed) in the 14-col layout
-    mark_data = []
-    mark_counts = {}
-    skipped_deleted = (
-        {}
-    )  # source_tab -> count of rows that vanished between read and stamp
-    for weekly_tab, source_tab in WEEKLY_SOURCE_TABS.items():
-        count = 0
-        skipped = 0
-        if not collected[weekly_tab]:
-            mark_counts[source_tab] = 0
-            skipped_deleted[source_tab] = 0
-            continue
-
-        # Re-read col M to get CURRENT row positions, then stamp by sid lookup.
-        sid_resp = _retry(
-            lambda t=source_tab: sheets.spreadsheets()
-            .values()
-            .get(spreadsheetId=OUTPUT_SPREADSHEET_ID, range=f"'{t}'!M:M")
-            .execute(),
-            label=f"re-read {source_tab} student_ids for stamping",
+    if since_date is not None:
+        # v2.7.6: --since is a read-only re-export keyed on Date Approved.
+        # The selected rows are already stamped with their ORIGINAL Sent Week
+        # (the week they were first sent to support). Re-stamping here would
+        # overwrite that per-week history and corrupt future default-mode
+        # runs. So --since never touches col O of the cumulative tabs.
+        print(
+            "\n  --since mode: skipping Sent Week stamping "
+            "(read-only re-export; cumulative tabs untouched)."
         )
-        current_sid_to_row = {}
-        for i, sid_row in enumerate(sid_resp.get("values", []), start=1):
-            if sid_row and sid_row[0]:
-                current_sid_to_row[str(sid_row[0]).strip()] = i
-
-        for _orig_row_num, row in collected[weekly_tab]:
-            sid = str(row[SID_COL_INDEX] or "").strip()
-            if not sid or sid not in current_sid_to_row:
-                # Row was deleted/shifted by Apps Script between read and stamp.
-                # Skip silently — the row will be picked up next snapshot run if
-                # it still exists with blank Sent Week.
-                skipped += 1
+    else:
+        print("\n  Marking selected rows with Sent Week...")
+        col_letter = _col_letter(SENT_WEEK_COL)
+        SID_COL_INDEX = 12  # col M = Student_ID (0-indexed) in the 14-col layout
+        mark_data = []
+        mark_counts = {}
+        skipped_deleted = (
+            {}
+        )  # source_tab -> count of rows that vanished between read and stamp
+        for weekly_tab, source_tab in WEEKLY_SOURCE_TABS.items():
+            count = 0
+            skipped = 0
+            if not collected[weekly_tab]:
+                mark_counts[source_tab] = 0
+                skipped_deleted[source_tab] = 0
                 continue
-            current_row_num = current_sid_to_row[sid]
-            # Only write if not already marked with this week's date
-            if str(row[SENT_WEEK_COL] or "").strip() != monday_iso:
-                mark_data.append(
-                    {
-                        "range": f"'{source_tab}'!{col_letter}{current_row_num}",
-                        "values": [[monday_iso]],
-                    }
-                )
-                count += 1
-        mark_counts[source_tab] = count
-        skipped_deleted[source_tab] = skipped
 
-    if mark_data:
-        _retry(
-            lambda: sheets.spreadsheets()
-            .values()
-            .batchUpdate(
-                spreadsheetId=OUTPUT_SPREADSHEET_ID,
-                body={"valueInputOption": "RAW", "data": mark_data},
+            # Re-read col M to get CURRENT row positions, then stamp by sid lookup.
+            sid_resp = _retry(
+                lambda t=source_tab: sheets.spreadsheets()
+                .values()
+                .get(spreadsheetId=OUTPUT_SPREADSHEET_ID, range=f"'{t}'!M:M")
+                .execute(),
+                label=f"re-read {source_tab} student_ids for stamping",
             )
-            .execute()
-        )
-    for src, cnt in mark_counts.items():
-        print(f"    {src}: stamped {cnt} row(s) with {monday_iso}")
+            current_sid_to_row = {}
+            for i, sid_row in enumerate(sid_resp.get("values", []), start=1):
+                if sid_row and sid_row[0]:
+                    current_sid_to_row[str(sid_row[0]).strip()] = i
+
+            for _orig_row_num, row in collected[weekly_tab]:
+                sid = str(row[SID_COL_INDEX] or "").strip()
+                if not sid or sid not in current_sid_to_row:
+                    # Row was deleted/shifted by Apps Script between read and stamp.
+                    # Skip silently — the row will be picked up next snapshot run if
+                    # it still exists with blank Sent Week.
+                    skipped += 1
+                    continue
+                current_row_num = current_sid_to_row[sid]
+                # Only write if not already marked with this week's date
+                if str(row[SENT_WEEK_COL] or "").strip() != monday_iso:
+                    mark_data.append(
+                        {
+                            "range": f"'{source_tab}'!{col_letter}{current_row_num}",
+                            "values": [[monday_iso]],
+                        }
+                    )
+                    count += 1
+            mark_counts[source_tab] = count
+            skipped_deleted[source_tab] = skipped
+
+        if mark_data:
+            _retry(
+                lambda: sheets.spreadsheets()
+                .values()
+                .batchUpdate(
+                    spreadsheetId=OUTPUT_SPREADSHEET_ID,
+                    body={"valueInputOption": "RAW", "data": mark_data},
+                )
+                .execute()
+            )
+        for src, cnt in mark_counts.items():
+            print(f"    {src}: stamped {cnt} row(s) with {monday_iso}")
 
     # ── Done ─────────────────────────────────────────────────────────
     elapsed = time.time() - start
@@ -974,7 +1055,14 @@ if __name__ == "__main__":
             "      cumulative tabs whose Sent Week is blank, regardless\n"
             "      of week. Adds an 'Instructions' tab pinned as the\n"
             "      first tab so support has plain-language guidance.\n"
-            "      Use this when generating an ad-hoc handoff.\n"
+            "      Use this when generating an ad-hoc handoff.\n\n"
+            "  python generate_weekly_snapshot.py --since 2026-05-05 \\\n"
+            "      --name '5/19 Corrections'\n"
+            "      Date-range export: bundle every row whose Date Approved\n"
+            "      (col A) is on or after the --since date, into a file\n"
+            "      named by --name. Filters on Date Approved, NOT Sent\n"
+            "      Week, and does NOT stamp the cumulative tabs (read-only\n"
+            "      re-export). Use for a consolidated multi-week view.\n"
         ),
     )
     parser.add_argument(
@@ -986,10 +1074,46 @@ if __name__ == "__main__":
             "packets."
         ),
     )
+    parser.add_argument(
+        "--since",
+        metavar="YYYY-MM-DD",
+        help=(
+            "Date-range export: include every row with Date Approved (col A) "
+            "on or after this date. Filters on col A, not Sent Week. Does NOT "
+            "stamp the cumulative tabs. Requires --name. Mutually exclusive "
+            "with --all-unsent."
+        ),
+    )
+    parser.add_argument(
+        "--name",
+        metavar="TITLE",
+        help=(
+            "Output file name in the Shared Drive (e.g. '5/19 Corrections'). "
+            "Required when --since is used; ignored otherwise."
+        ),
+    )
     args = parser.parse_args()
 
+    # ── Validate --since / --name / --all-unsent combination ────────────
+    since_date = None
+    if args.since is not None:
+        if args.all_unsent:
+            parser.error("--since and --all-unsent are mutually exclusive.")
+        if not args.name:
+            parser.error("--since requires --name (the output file name).")
+        try:
+            since_date = datetime.strptime(args.since, "%Y-%m-%d").date()
+        except ValueError:
+            parser.error(f"--since must be YYYY-MM-DD; got '{args.since}'.")
+    elif args.name:
+        parser.error("--name is only valid together with --since.")
+
     try:
-        main(all_unsent=args.all_unsent)
+        main(
+            all_unsent=args.all_unsent,
+            since_date=since_date,
+            custom_name=args.name,
+        )
     except Exception as e:
         print(f"\n  FATAL: {e}")
         import traceback

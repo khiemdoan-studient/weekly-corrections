@@ -1,5 +1,37 @@
 # Changelog
 
+## [v2.7.6] - 2026-05-19
+
+### Added
+- **`generate_weekly_snapshot.py` `--since YYYY-MM-DD --name "TITLE"` date-range export mode.** Produces a consolidated snapshot of every correction whose Date Approved (col A) is on or after the `--since` date, into a Shared Drive file named `TITLE`. Fills the gap where the existing tooling could only filter by Sent Week status (`--all-unsent`) or current Monday (default). Neither can express "all changes after date X across multiple weeks".
+  - `_parse_date_approved(date_str)`: parses col A into a `date`. Handles `%Y-%m-%d %H:%M:%S`, `%m/%d/%Y %H:%M:%S`, `%Y-%m-%d`, `%m/%d/%Y`. Returns `None` for blank/unparseable.
+  - `filter_since_date(rows, since_date)`: selects `(row_num, row)` where col A date >= `since_date`. The only filter mode keyed on col A; default + `--all-unsent` key on col O.
+  - `main()` extended to `main(all_unsent=False, since_date=None, custom_name=None)`.
+  - argparse: `--since` + `--name`. Validation: `--since` requires `--name`; `--since` mutually exclusive with `--all-unsent`; `--name` only valid with `--since`.
+
+### Key behavior
+- **`--since` is inclusive** of the given day. The first run used `--since 2026-05-05` to honor the user's "strictly after 5/4" intent.
+- **No Sent Week stamping.** The stamping block is wrapped in `if since_date is None:`. `--since` selected rows keep their original per-week Sent Week values. Re-stamping would corrupt per-week history and break future default-mode cron runs. `--since` never writes the cumulative tabs (read-only re-export).
+- **No Instructions tab.** Gated on `all_unsent` (stays False). 3 data tabs only.
+- **Idempotent.** Re-running with the same `--name` updates the file in place (find-or-create by exact name).
+
+### Why
+User asked for "a new corrections sheet for all the changes after 5/4 to present". Probe showed every cumulative-tab row was already stamped sent (Sent Week 04-20 / 05-04 / 05-11 / 05-18), so `--all-unsent` would have returned zero rows; the default mode only bundles the current Monday. A date-range mode was the only way to express the ask.
+
+### Verified
+- `python -m py_compile generate_weekly_snapshot.py` passes. `--help` shows the new flags + example.
+- First run: `python generate_weekly_snapshot.py --since 2026-05-05 --name "5/19 Corrections"` CREATED file id `1BXCdHyRQhUtL4y4oEYfVD6hz4_uDRynqaBG8AqJ5sqM` in the Weekly Corrections Archive Shared Drive. 3 tabs: Correction List 77, Roster Additions 44, Roster Unenrollments 47 (168 total).
+- **col O integrity check**: SHA-256 of col O on all 3 cumulative tabs (`_ApprovedData`, `_AdditionsData`, `_UnenrollData`) byte-identical before and after the run. Confirms no stamping. `--since` is genuinely read-only w.r.t. the cumulative tabs.
+- New file structure: 3 tabs at index 0/1/2, no Instructions tab, default `Sheet1` deleted. Date ranges per tab all >= 2026-05-05 (5/4 correctly excluded). 14-col header (`Date Approved`, `Mismatch Summary`, `Campus`, ...).
+- Default mode + `--all-unsent` mode untouched. Additive change: both paths bypass the new `since_date` branches.
+
+### Files changed
+- `generate_weekly_snapshot.py`: `_parse_date_approved`, `filter_since_date`, `main()` branches, argparse flags, docstring + epilog
+- `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`: this entry + Date-range export mode section
+
+### User action required
+- **None.** The "5/19 Corrections" file is in the Shared Drive. Open it, click Share, send to support. Re-run `python generate_weekly_snapshot.py --since 2026-05-05 --name "5/19 Corrections"` any time to refresh it in place.
+
 ## [v2.7.5] - 2026-05-08
 
 ### Changed
