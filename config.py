@@ -212,6 +212,10 @@ TAB_APPROVED = "Automated Correction List"
 TAB_ADDITIONS = "Roster Additions"
 TAB_UNENROLL = "Roster Unenrollments"
 TAB_REJECTED = "Rejected Changes"
+# v2.8.0: students in the SIS but missing from the MAP roster (reverse of
+# "Roster Addition"). Mismatch label is "Add to MAP Roster"; accepted rows
+# route to the cumulative tab "_MapAdditionsData".
+TAB_MAP_ADDITIONS = "Missing from MAP Roster"
 
 # ── Output column headers ──────────────────────────────────────────────────
 OUTPUT_FIELDS = [

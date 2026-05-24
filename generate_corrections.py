@@ -433,6 +433,37 @@ def compare_students(map_enrolled, map_non_enrolled, sis_students):
         corrections_sis.append(dict(sis_rec))
         unenroll_count += 1
 
+    # ── SIS-only students (in SIS, not in MAP) → "Add to MAP Roster" ──────
+    # v2.8.0: the reverse of "Roster Addition". A student enrolled in the SIS
+    # with NO MAP row is invisible to the two loops above (both iterate MAP).
+    # Scope to MANAGED campuses only: the alpha_roster BQ table is a global
+    # Alpha export (~9,400 students incl. hundreds from unmanaged schools).
+    # The set of Campus values present in the MAP roster IS the managed set,
+    # and MAP Campus values exactly match SIS campus values, so membership
+    # cleanly isolates the managed campuses. Obvious test accounts skipped.
+    add_to_map_count = 0
+    managed_campuses = {
+        (rec.get("Campus") or "").strip()
+        for rec in list(map_enrolled.values()) + list(map_non_enrolled.values())
+        if (rec.get("Campus") or "").strip()
+    }
+    map_ids = set(map_enrolled) | set(map_non_enrolled)
+    for student_id, sis_rec in sorted(sis_students.items()):
+        if student_id in map_ids:
+            continue  # has a MAP row — handled by the loops above
+        if sis_rec.get("admissionstatus", "").strip().lower() != "enrolled":
+            continue  # only currently-enrolled SIS students
+        if (sis_rec.get("Campus") or "").strip() not in managed_campuses:
+            continue  # unmanaged Alpha school (TSA, Colearn, etc.)
+        if _is_test_account(sis_rec):
+            continue  # skip obvious test accounts per user spec
+
+        rec = dict(sis_rec)
+        rec["mismatch_summary"] = "Add to MAP Roster"
+        corrections_map.append(rec)
+        corrections_sis.append(dict(sis_rec))
+        add_to_map_count += 1
+
     print(f"  Matches (no correction needed): {match_count:,}")
     print(f"  Roster Additions (not in SIS): {roster_addition_count:,}")
     print(f"  Field mismatches: {field_mismatch_count:,}")
@@ -440,9 +471,16 @@ def compare_students(map_enrolled, map_non_enrolled, sis_students):
         f"  Unenrolling: {unenroll_count:,} "
         f"(IM-flagged: {im_flagged_unenroll_count:,}, Notes-based: {unenroll_count - im_flagged_unenroll_count:,})"
     )
+    print(f"  Add to MAP Roster (in SIS, not in MAP): {add_to_map_count:,}")
     print(f"  Total corrections: {len(corrections_map):,}")
 
     return corrections_map, corrections_sis
+
+
+def _is_test_account(rec):
+    """True if the record looks like a test account (name contains 'test')."""
+    name = f"{rec.get('First Name', '')} {rec.get('Last Name', '')}".lower()
+    return "test" in name
 
 
 def _find_mismatches(map_rec, sis_rec, is_timeback=False):
@@ -522,7 +560,13 @@ def read_handled_student_keys(sheets_service):
     """
     handled = set()
 
-    for tab in ["_ApprovedData", "_AdditionsData", "_UnenrollData", "_RejectedData"]:
+    for tab in [
+        "_ApprovedData",
+        "_AdditionsData",
+        "_UnenrollData",
+        "_RejectedData",
+        "_MapAdditionsData",  # v2.8.0: "Add to MAP Roster" accepted rows
+    ]:
         # v2.5.2: wrapped in retry_api. If transient errors exhaust all
         # retries, fall through to silent skip (the next hourly run will catch up).
         try:

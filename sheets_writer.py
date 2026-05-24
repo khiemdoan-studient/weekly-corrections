@@ -30,6 +30,7 @@ from config import (
     TAB_ADDITIONS,
     TAB_UNENROLL,
     TAB_REJECTED,
+    TAB_MAP_ADDITIONS,
     OUTPUT_FIELDS,
 )
 from retry_helper import (
@@ -62,6 +63,7 @@ GREEN_LIGHT = _rgb("D4EDDA")  # light green for Roster Addition
 YELLOW_MM = _rgb("FFF3CD")  # yellow for field mismatches
 YELLOW_LIGHT = _rgb("FFFDE7")  # light yellow (legacy — no longer used)
 RED_LIGHT = _rgb("FEE2E2")  # light red for Unenrolling
+BLUE_LIGHT = _rgb("CCE5FF")  # light blue for "Add to MAP Roster" (v2.8.0)
 ACCEPT_BG = _rgb("D4EDDA")  # light green for Accept Changes column
 REJECT_BG = _rgb("FEE2E2")  # light red for Reject Changes column
 
@@ -123,6 +125,9 @@ SORT_OPTS_SHEET3 = [  # _ApprovedData 14 cols
 ]
 SORT_OPTS_SHEET4 = list(SORT_OPTS_SHEET3)  # _AdditionsData — same layout
 SORT_OPTS_SHEET5 = list(SORT_OPTS_SHEET3)  # _UnenrollData — same layout
+SORT_OPTS_SHEET7 = list(
+    SORT_OPTS_SHEET3
+)  # _MapAdditionsData, same 14-col layout (v2.8.0)
 SORT_OPTS_SHEET6 = [  # _RejectedData 14 cols
     "Date Rejected",
     "Mismatch Summary",
@@ -499,6 +504,25 @@ def _build_sorted_query_sheet6(sort_list_range):
     return q
 
 
+def _build_sorted_query_sheet7(sort_list_range):
+    """SORT(QUERY()) for Sheet 7 (Missing from MAP Roster). Source:
+    _MapAdditionsData. Same 14-col mapping as _AdditionsData (v2.8.0).
+    """
+    src = "'_MapAdditionsData'!A:N"
+    q = (
+        f"=IFERROR(SORT(QUERY({src}, "
+        '"SELECT * WHERE 1=1"'
+        f'& IF($A$5="All", "", " AND Col3=\'" & {_sq("$A$5")} & "\'")'  # Campus=Col3
+        f'& IF($C$5="All", "", " AND Col4=\'" & {_sq("$C$5")} & "\'")'  # Grade=Col4
+        f'& IF($E$5="All", "", " AND Col5=\'" & {_sq("$E$5")} & "\'")'  # Level=Col5
+        f'& IF($G$5="All", "", " AND Col9=\'" & {_sq("$G$5")} & "\'")'  # StudentGroup=Col9
+        f'& IF($I$5="All", "", " AND Col12=\'" & {_sq("$I$5")} & "\'")'  # GuideEmail=Col12
+        f", 0), MATCH($K$5, {sort_list_range}, 0), "
+        'IF(OR($K$5="Date Approved"), FALSE, TRUE)), "")'
+    )
+    return q
+
+
 def _clear_conditional_format_rules(sheets_service, spreadsheet_id, sheet_ids):
     """Remove all conditional formatting rules from specified sheets."""
     resp = _retry_api(
@@ -546,6 +570,7 @@ def _migrate_cumulative_tabs(sheets_service, spreadsheet_id):
         "_AdditionsData",
         "_UnenrollData",
         "_RejectedData",
+        "_MapAdditionsData",  # v2.8.0
     ]
 
     for tab_name in cumulative_tabs:
@@ -657,6 +682,7 @@ def _backfill_mismatch_summary(sheets_service, spreadsheet_id):
     # Backfill each cumulative tab
     backfill_map = {
         "_ApprovedData": None,  # lookup from _CorrData
+        "_MapAdditionsData": "Add to MAP Roster",  # v2.8.0: always this type
         "_AdditionsData": "Roster Addition",  # always this type
         "_UnenrollData": "Unenrolling",  # always this type
         "_RejectedData": None,  # lookup from _CorrData
@@ -851,10 +877,12 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         "_UnenrollData",
         "_RejectedData",
         "_RejectionReasons",  # v2.7.4: 2-col tab (sid, reason). Decoupled from cumulative tabs.
+        "_MapAdditionsData",  # v2.8.0: "Add to MAP Roster" cumulative tab (14-col)
         "_Lists",
         TAB_ADDITIONS,
         TAB_UNENROLL,
         TAB_REJECTED,
+        TAB_MAP_ADDITIONS,  # v2.8.0: Sheet 7 "Missing from MAP Roster"
     ]
     tab_ids = _ensure_all_tabs(sheets_service, sid, all_tab_names)
     sheet1_id = tab_ids[TAB_CORRECTED]
@@ -863,15 +891,25 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
     sheet4_id = tab_ids[TAB_ADDITIONS]
     sheet5_id = tab_ids[TAB_UNENROLL]
     sheet6_id = tab_ids[TAB_REJECTED]
+    sheet7_id = tab_ids[TAB_MAP_ADDITIONS]  # v2.8.0
     corr_data_id = tab_ids["_CorrData"]
     sis_data_id = tab_ids["_SISData"]
     approved_data_id = tab_ids["_ApprovedData"]
     additions_data_id = tab_ids["_AdditionsData"]
     unenroll_data_id = tab_ids["_UnenrollData"]
     rejected_data_id = tab_ids["_RejectedData"]
+    map_additions_data_id = tab_ids["_MapAdditionsData"]  # v2.8.0
     lists_id = tab_ids["_Lists"]
 
-    visible_ids = [sheet1_id, sheet2_id, sheet3_id, sheet4_id, sheet5_id, sheet6_id]
+    visible_ids = [
+        sheet1_id,
+        sheet2_id,
+        sheet3_id,
+        sheet4_id,
+        sheet5_id,
+        sheet6_id,
+        sheet7_id,
+    ]
 
     # ── Clear banding + conditional formatting + data ─────────────────
     _clear_banding(sheets_service, sid, visible_ids)
@@ -911,6 +949,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         TAB_ADDITIONS: "A:Z",
         TAB_UNENROLL: "A:Z",
         TAB_REJECTED: "A:N",  # v2.7.3: preserve col O (Reason for Rejection)
+        TAB_MAP_ADDITIONS: "A:Z",  # v2.8.0: Sheet 7 (cumulative _MapAdditionsData NOT cleared)
         "_CorrData": "A:Z",
         "_SISData": "A:Z",
         "_Lists": "A:Z",
@@ -987,7 +1026,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         .execute()
     )
 
-    # _Lists: 11 columns — 5 filter values (A-E) + 6 sort options (F-K)
+    # _Lists: 12 columns — 5 filter values (A-E) + 7 sort options (F-L)
     n = {k: len(v) for k, v in unique.items()}
     s1 = SORT_OPTS_SHEET1
     s2 = SORT_OPTS_SHEET2
@@ -995,7 +1034,10 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
     s4 = SORT_OPTS_SHEET4
     s5 = SORT_OPTS_SHEET5
     s6 = SORT_OPTS_SHEET6
-    max_len = max(max(n.values()), len(s1), len(s2), len(s3), len(s4), len(s5), len(s6))
+    s7 = SORT_OPTS_SHEET7  # v2.8.0: Sheet 7 sort options (col L)
+    max_len = max(
+        max(n.values()), len(s1), len(s2), len(s3), len(s4), len(s5), len(s6), len(s7)
+    )
     lists_header = [
         "campus",
         "grade",
@@ -1008,6 +1050,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         "sort_sheet4",
         "sort_sheet5",
         "sort_sheet6",
+        "sort_sheet7",
     ]
     lists_rows = [lists_header]
     filter_keys = ["campus", "grade", "level", "student_group", "guide_email"]
@@ -1022,6 +1065,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         row.append(s4[i] if i < len(s4) else "")
         row.append(s5[i] if i < len(s5) else "")
         row.append(s6[i] if i < len(s6) else "")
+        row.append(s7[i] if i < len(s7) else "")
         lists_rows.append(row)
 
     _retry_api(
@@ -1048,6 +1092,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         "sort4": f"_Lists!I2:I{len(s4) + 1}",
         "sort5": f"_Lists!J2:J{len(s5) + 1}",
         "sort6": f"_Lists!K2:K{len(s6) + 1}",
+        "sort7": f"_Lists!L2:L{len(s7) + 1}",
     }
 
     # ══════════════════════════════════════════════════════════════════
@@ -1063,6 +1108,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
     NC4 = 14  # date + mismatch summary + 12 fields (Roster Additions)
     NC5 = 14  # date + mismatch summary + 12 fields (Roster Unenrollments)
     NC6 = 15  # date + mismatch summary + 12 fields + reason for rejection
+    NC7 = 14  # date + mismatch summary + 12 fields (Missing from MAP Roster, v2.8.0)
 
     # ── Sheet 1: Corrected Roster Info ────────────────────────────────
     vals_raw[f"'{TAB_CORRECTED}'!A1"] = [["Corrected Roster Info"]]
@@ -1216,6 +1262,31 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         [_build_sorted_query_sheet6(list_ranges["sort6"])]
     ]
 
+    # ── Sheet 7: Missing from MAP Roster (v2.8.0) ─────────────────────
+    vals_raw[f"'{TAB_MAP_ADDITIONS}'!A1"] = [["Missing from MAP Roster"]]
+    s7_r4 = [""] * NC7
+    s7_r4[0] = "Campus"
+    s7_r4[2] = "Grade"
+    s7_r4[4] = "Level"
+    s7_r4[6] = "Student Group"
+    s7_r4[8] = "Guide Email"
+    s7_r4[10] = "SORT BY"
+    vals_raw[f"'{TAB_MAP_ADDITIONS}'!A4"] = [s7_r4]
+    s7_r5 = [""] * NC7
+    s7_r5[0] = "All"
+    s7_r5[2] = "All"
+    s7_r5[4] = "All"
+    s7_r5[6] = "All"
+    s7_r5[8] = "All"
+    s7_r5[10] = "Date Approved"
+    vals_raw[f"'{TAB_MAP_ADDITIONS}'!A5"] = [s7_r5]
+    vals_raw[f"'{TAB_MAP_ADDITIONS}'!A6"] = [
+        ["Date Approved", "Mismatch Summary"] + OUTPUT_FIELDS
+    ]
+    vals_entered[f"'{TAB_MAP_ADDITIONS}'!A7"] = [
+        [_build_sorted_query_sheet7(list_ranges["sort7"])]
+    ]
+
     # ── Write values (batched — 2 API calls instead of 15+) ─────────
     _retry_api(
         lambda: sheets_service.spreadsheets()
@@ -1314,11 +1385,22 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
             num_data_rows=0,
         )
     )
+    fmt.extend(
+        _format_visible_sheet(
+            sheet7_id,
+            NC7,
+            list_ranges,
+            has_checkbox=False,
+            sort_col_start=10,
+            sort_list_key="sort7",
+            num_data_rows=0,
+        )
+    )
     # Reason for Rejection column width on Sheet 6 (last col = index 14)
     fmt.append(_cw(sheet6_id, NC6 - 1, 250))
 
-    # Mismatch Summary col B (index 1): red header + 200px width on Sheets 3-6
-    for ms_sheet_id in [sheet3_id, sheet4_id, sheet5_id, sheet6_id]:
+    # Mismatch Summary col B (index 1): red header + 200px width on Sheets 3-7
+    for ms_sheet_id in [sheet3_id, sheet4_id, sheet5_id, sheet6_id, sheet7_id]:
         fmt.append(
             _rc(
                 ms_sheet_id,
@@ -1339,6 +1421,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         additions_data_id,
         unenroll_data_id,
         rejected_data_id,
+        map_additions_data_id,  # v2.8.0
         lists_id,
     ]:
         fmt.append(
@@ -1355,7 +1438,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
     # hard ceiling would eventually be hit (~5 weeks at 200 mismatches/week with
     # a 7-day hide window). 10_000 rows gives ~2 years of headroom; re-evaluate
     # if any cumulative tab approaches that.
-    for date_sheet_id in [sheet3_id, sheet4_id, sheet5_id, sheet6_id]:
+    for date_sheet_id in [sheet3_id, sheet4_id, sheet5_id, sheet6_id, sheet7_id]:
         fmt.append(
             {
                 "repeatCell": {
@@ -1668,7 +1751,26 @@ def _format_visible_sheet(
                 }
             }
         )
-        # Rule 2: NOT_BLANK → yellow (catches field mismatches)
+        # Rule 2: "Add to MAP Roster" → light blue (v2.8.0). MUST precede the
+        # NOT_BLANK catch-all below, else it would be colored yellow.
+        fmt.append(
+            {
+                "addConditionalFormatRule": {
+                    "rule": {
+                        "ranges": [mm_range],
+                        "booleanRule": {
+                            "condition": {
+                                "type": "TEXT_CONTAINS",
+                                "values": [{"userEnteredValue": "Add to MAP Roster"}],
+                            },
+                            "format": {"backgroundColor": BLUE_LIGHT},
+                        },
+                    },
+                    "index": 2,
+                }
+            }
+        )
+        # Rule 3: NOT_BLANK → yellow (catches field mismatches)
         fmt.append(
             {
                 "addConditionalFormatRule": {
@@ -1679,7 +1781,7 @@ def _format_visible_sheet(
                             "format": {"backgroundColor": YELLOW_MM},
                         },
                     },
-                    "index": 2,
+                    "index": 3,
                 }
             }
         )

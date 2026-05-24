@@ -10,6 +10,8 @@ This tool compares student enrollment data between two sources:
 
 Students with mismatched data appear in a corrections spreadsheet for manager review.
 
+v2.8.0 adds a reverse-direction check: students enrolled in the SIS with no MAP row are flagged "Add to MAP Roster" (Sheet 7 "Missing from MAP Roster"), scoped to managed campuses. This complements "Roster Addition" (in MAP, not in SIS).
+
 ## Critical File Map
 
 | File | Lines | Purpose |
@@ -54,6 +56,7 @@ Note: `sheets_writer.py` and `generate_weekly_snapshot.py` previously had per-fi
 - `_UnenrollData` — Cumulative approved unenrollments (14 cols, same layout)
 - `_RejectedData` — Cumulative rejected changes (14 cols, same layout)
 - `_RejectionReasons` — v2.7.4: dedicated 2-col tab (`student_id`, `reason`) for persistent storage of "Reason for Rejection". Decoupled from the 4 cumulative tabs to survive `_realign_row` truncation, `_backfill_mismatch_summary` clear, `removeStudentFromCumulativeTabs_` deletion on Reject toggle, and any other `_RejectedData` rebuild path.
+- `_MapAdditionsData` — v2.8.0: cumulative tab (14-col, same layout as `_AdditionsData`) for accepted "Add to MAP Roster" students. Feeds Sheet 7 "Missing from MAP Roster". Hidden. Apps Script appends here on accept; `read_handled_student_keys` reads it for hide-handled.
 
 ### Sheet 1: "Corrected Roster Info" (MAP data + accept/reject checkboxes)
 | Row | Content |
@@ -407,11 +410,15 @@ The formula pattern for Sheet 1 (offset by 2 for accept/reject columns):
 
 | Type | Mismatch Summary | Condition | Color |
 |------|-----------------|-----------|-------|
-| Roster Addition | "Roster Addition" | Enrolled in MAP, student_id not in SIS | Light green (#D4EDDA) |
+| Roster Addition | "Roster Addition" | Enrolled in MAP, student_id not in SIS (add to SIS) | Light green (#D4EDDA) |
 | Field Mismatch | "Grade, Email" etc. | Enrolled in both, fields differ | Yellow (#FFF3CD) |
 | Unenrolling | "Unenrolling" | IM-flagged Unenroll=TRUE OR Notes != "Enrolled" in MAP, admissionstatus = "Enrolled" in SIS | Light red (#FEE2E2) |
+| Add to MAP Roster (v2.8.0) | "Add to MAP Roster" | Enrolled in SIS, no MAP row, Campus is a managed campus, not a test account (add to MAP) | Light blue (#CCE5FF) |
 
-Colors are applied via conditional formatting rules on the Mismatch Summary column (Sheet 1 only), in priority order: Roster Addition → Unenrolling → NOT_BLANK (field mismatches).
+Colors are applied via conditional formatting rules on the Mismatch Summary column (Sheet 1 only), in priority order: Roster Addition (green), Unenrolling (red), Add to MAP Roster (blue), then NOT_BLANK (yellow, catches field mismatches). The "Add to MAP Roster" rule MUST precede NOT_BLANK or it would be colored yellow.
+
+### "Add to MAP Roster" detection (v2.8.0)
+The reverse of "Roster Addition". `compare_students` has a 3rd loop that iterates `sis_students` and flags any enrolled SIS student with no MAP row. Scoped to MANAGED campuses (the set of distinct Campus values in the MAP roster) because `alpha_roster` is a global Alpha export with hundreds of unmanaged-school students. `_is_test_account` skips obvious test rows. The SIS data is shown on Sheet 1 (so the IM sees who to add) and routed on accept to `_MapAdditionsData` -> Sheet 7 "Missing from MAP Roster". `read_handled_student_keys` includes `_MapAdditionsData` so accepted rows hide from Sheet 1.
 
 ## Data Sources
 

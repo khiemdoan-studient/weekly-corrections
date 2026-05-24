@@ -1,5 +1,5 @@
 /**
- * Automated Weekly Corrections — Apps Script (v2.7.4)
+ * Automated Weekly Corrections — Apps Script (v2.8.0)
  *
  * Source of truth: this file in the repo. Deployed to the Apps Script
  * project bound to the corrections spreadsheet via clasp:
@@ -17,8 +17,9 @@
  *
  * FEATURE 1: Accept/Reject checkbox handler (onEdit)
  *   - Active only when current sheet is "Corrected Roster Info"
- *   - Accept (col A, green) routes to _ApprovedData / _AdditionsData / _UnenrollData by mismatch type
+ *   - Accept (col A, green) routes to _ApprovedData / _AdditionsData / _UnenrollData / _MapAdditionsData by mismatch type
  *   - Reject (col B, red) routes to _RejectedData
+ *   - v2.8.0: "Add to MAP Roster" (SIS-only student) routes to _MapAdditionsData
  *   - IDEMPOTENT: toggling a checkbox (accept → uncheck → reject) removes stale entries;
  *     student only appears in one cumulative tab at a time (the latest state)
  *   - PRE-FORMATTED dates: eliminates race condition on concurrent checkbox edits
@@ -122,6 +123,9 @@ function onEdit(e) {
         targetTabName = "_AdditionsData";
       } else if (mismatchSummary === "Unenrolling") {
         targetTabName = "_UnenrollData";
+      } else if (mismatchSummary === "Add to MAP Roster") {
+        // v2.8.0: SIS-only student to be added to the MAP roster
+        targetTabName = "_MapAdditionsData";
       } else {
         targetTabName = "_ApprovedData";
       }
@@ -164,7 +168,13 @@ function clearCheckboxes_(sheet) {
  */
 function removeStudentFromCumulativeTabs_(ss, studentId) {
   if (!studentId) return;
-  var tabs = ["_ApprovedData", "_AdditionsData", "_UnenrollData", "_RejectedData"];
+  var tabs = [
+    "_ApprovedData",
+    "_AdditionsData",
+    "_UnenrollData",
+    "_RejectedData",
+    "_MapAdditionsData", // v2.8.0
+  ];
   var SID_COL = 13; // col M
   for (var t = 0; t < tabs.length; t++) {
     var tab = ss.getSheetByName(tabs[t]);

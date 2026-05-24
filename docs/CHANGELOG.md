@@ -1,5 +1,41 @@
 # Changelog
 
+## [v2.8.0] - 2026-05-19
+
+### Added
+- **New mismatch type "Add to MAP Roster" + new Sheet 7 "Missing from MAP Roster".** Detects students enrolled in the SIS who have NO row in the MAP roster (the reverse of "Roster Addition", which is in-MAP-not-in-SIS). Previously these were invisible: `compare_students` only iterated MAP students, so a SIS-only student was never flagged in any direction.
+- **`generate_corrections.py::compare_students`**: a 3rd detection loop iterates `sis_students`. A student is flagged "Add to MAP Roster" when: not in MAP (enrolled or non-enrolled), `admissionstatus == "Enrolled"`, Campus is one of the managed campuses, and not a test account.
+  - **Managed-campus scoping**: `alpha_roster` is a global Alpha export (~9,400 students incl. hundreds from unmanaged schools: TSA, Colearn, Alpha Miami, etc.). Scope = the set of distinct Campus values present in the MAP roster. Verified that MAP Campus values exactly match SIS campus values, so membership cleanly isolates the 11 managed campuses.
+  - **Test-account filter** (`_is_test_account`): skips rows whose first+last name contains "test" (case-insensitive). Removed 3 on first run (Test Metro, Pasco Test, Test JHES).
+- **`config.py`**: `TAB_MAP_ADDITIONS = "Missing from MAP Roster"`.
+- **`sheets_writer.py`**: Sheet 7 plumbing mirroring Sheet 4 (Roster Additions): `SORT_OPTS_SHEET7`, `_build_sorted_query_sheet7` (src `_MapAdditionsData!A:N`), new `_MapAdditionsData` cumulative tab (14-col, hidden) + `TAB_MAP_ADDITIONS` visible sheet, `_Lists` sort col L (`sort7`), row block, `_format_visible_sheet` call, red Mismatch-header + DATE_TIME-format loops, `_migrate_cumulative_tabs` + `_backfill_mismatch_summary` coverage, and a Sheet 1 conditional-format rule "Add to MAP Roster" -> light blue (`#CCE5FF`), inserted before the NOT_BLANK yellow catch-all.
+- **`Code.js`**: accept routing for "Add to MAP Roster" -> `_MapAdditionsData`; `_MapAdditionsData` added to `removeStudentFromCumulativeTabs_`.
+- **`generate_corrections.py::read_handled_student_keys`**: `_MapAdditionsData` added so accepted Add-to-MAP students hide from Sheet 1 (v2.7.5 tuple logic).
+
+### Workflow
+On Sheet 1 ("Corrected Roster Info") an Add-to-MAP row shows the SIS student data (so the IM sees who to add) with a light-blue Mismatch Summary. The IM accepts -> Apps Script routes to `_MapAdditionsData` -> the student appears on Sheet 7 "Missing from MAP Roster". The IM then adds the student to the MAP roster manually. Reject routes to `_RejectedData` like any other type.
+
+### Direction note
+"Roster Addition" = in MAP, not in SIS (data team adds to SIS). "Add to MAP Roster" = in SIS, not in MAP (IMs add to MAP). Opposite directions, distinct label + distinct sheet, so the two are never conflated.
+
+### Verified
+- `python -m py_compile config.py generate_corrections.py sheets_writer.py`; `node --check Code.js`. All pass.
+- `python generate_corrections.py`: "Add to MAP Roster (in SIS, not in MAP): 23". Both new tabs auto-created (`_MapAdditionsData` hidden, "Missing from MAP Roster" visible).
+- Live `_CorrData` probe: 23 Add-to-MAP rows. By campus: JHMS 7, Vita 5, JHES 3, JRHS 3, AASP 2, JRES 2, AFMS 1. Test accounts present: 0. Unmanaged-school rows: 0 (scoping correct). (26 raw SIS-only minus 3 test accounts = 23; Metro dropped out entirely since its only SIS-only student was a test account.)
+- Sheet 7 header correct (`Date Approved, Mismatch Summary, Campus, ...`), 0 data rows until IMs accept.
+- Sheet 1 conditional-format rules read back via API: 4 rules in correct priority order, "Add to MAP Roster" -> blue (0.80, 0.90, 1.00) ahead of NOT_BLANK -> yellow.
+- Existing 3 detection paths untouched (additive 3rd loop; existing loops unchanged).
+
+### Excluded (out of scope)
+- Weekly snapshot: `_MapAdditionsData` is NOT in `WEEKLY_SOURCE_TABS` (these go to IMs to add to MAP, not the SIS data team).
+- No automated MAP writes; IMs add students manually after review.
+
+### Files changed
+- `config.py`, `generate_corrections.py`, `sheets_writer.py`, `Code.js`, `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
+### User action required
+- Deploy lands the Apps Script routing automatically (clasp). After the next pipeline run, review the new Sheet 7 candidates on Sheet 1, accept the real ones, and add them to the MAP roster.
+
 ## [v2.7.6] - 2026-05-19
 
 ### Added
