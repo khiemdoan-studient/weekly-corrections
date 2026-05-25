@@ -1,5 +1,28 @@
 # Changelog
 
+## [v2.8.4] - 2026-05-25
+
+Email-fallback matching so students who are in both MAP and SIS but missing their MAP Student ID stop showing as false "Add to MAP Roster", plus a loud warning when a campus sheet yields zero students.
+
+### Added
+- **Email-fallback matching (`generate_corrections.py`)**. Matching was 100% Student-ID-keyed with no fallback, so a MAP row with a blank or wrong Student ID could never match its SIS record.
+  - `read_map_roster` now keeps blank-Student-ID rows that have an email (previously dropped at the `if not student_id: continue` gate) in a new `map_emailonly` list, and builds `all_map_emails` (every lowercased MAP email).
+  - `compare_students` builds a `sis_by_email` index. Loop 1 tries an email match before declaring "Roster Addition" (catches typo'd ids). A new loop flags email-only rows that match the SIS by email as a **"Student ID"** correction, stamped with the correct SIS id so the IM knows what to enter and each row gets a distinct hide key. The "Add to MAP Roster" loop now skips any SIS student whose email already exists in the MAP via an email-only row.
+  - Result for the reported students: Vita's Yember Aguilera (033-2634) and Dauz Lee-Zablotny (033-8879), enrolled in OneRoster but with blank MAP ids, now show as "Student ID" corrections (fill in the id) instead of false "Add to MAP Roster". 10 such students surfaced across Vita / JHMS / JHES / AFMS / Reading.
+- **Loud zero-student warning (`read_map_roster`)**. If a campus sheet processes 0 students out of N data rows, it prints a `*** WARNING` with the detected columns. This surfaced that Reading CCSD (Dash) processes 0 of 1,199 rows: its Notes column is all-blank on a non-Timeback sheet, so every row is skipped. Pre-existing gap, now visible.
+
+### Investigated (no code change)
+- **Metro Mariam Hassan (079-10490) + JHES dylan/eleazar/keyon (083-15135/15138/15140)**: genuinely absent from `alpha_roster` (verified by fullid + name). Correct "Roster Addition" (real adds to SIS).
+- **Gabriela Condari**: no "Condari" in the SIS and not in the managed MAP; "domain_disabled / external user" is an unmanaged Google account. Not actionable from this pipeline.
+- **JHMS (Hardeeville Junior & Senior High) is NOT invisible.** Its MAP col-A header reads '4', but `read_map_roster` already has a fallback (assume col A = Student ID when Notes is detected and >=5 cols matched), so all ~330 students ARE processed (a `NOTE` prints each run). The '4' lives in the SOURCE MAP Roster master (`1g8KU...`), pulled into the JHMS tab via `=IMPORTRANGE(...,"MAP Roster!A:N")`. An attempt to overwrite the JHMS-tab A1 deleted that importrange and briefly blanked the campus; it was immediately restored. A literal 'Student ID' header can only be set in the source sheet, and it is cosmetic since the fallback works.
+
+### Verified
+- `python -m py_compile generate_corrections.py` passes.
+- Live run: Student ID = 10 (incl. Yember 033-2634 + Dauz 033-8879, each carrying their SIS id in `_CorrData`); `_MapAdditionsData` has no Yember/Dauz; Mariam + the 3 JHES students still "Roster Addition"; JHMS processed (309 enrolled); the Reading CCSD 0-student warning fires.
+
+### Files changed
+- `generate_corrections.py`, `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
 ## [v2.8.3] - 2026-05-25
 
 Bulletproof "Reason for Rejection" persistence: a pipeline-side capture step so typed reasons survive every refresh even if the onEdit Apps Script bridge is dead.

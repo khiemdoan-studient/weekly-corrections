@@ -417,11 +417,21 @@ The formula pattern for Sheet 1 (offset by 2 for accept/reject columns):
 | Field Mismatch | "Grade, Email" etc. | Enrolled in both, fields differ | Yellow (#FFF3CD) |
 | Unenrolling | "Unenrolling" | IM-flagged Unenroll=TRUE OR Notes != "Enrolled" in MAP, admissionstatus = "Enrolled" in SIS | Light red (#FEE2E2) |
 | Add to MAP Roster (v2.8.0) | "Add to MAP Roster" | Enrolled in SIS, no MAP row, Campus is a managed campus, not a test account (add to MAP) | Light blue (#CCE5FF) |
+| Student ID (v2.8.4) | "Student ID" | MAP row has a blank Student ID but matches a SIS student by email (fill in the MAP id; the row carries the correct SIS id) | Yellow (NOT_BLANK catch-all) |
 
 Colors are applied via conditional formatting rules on the Mismatch Summary column (Sheet 1 only), in priority order: Roster Addition (green), Unenrolling (red), Add to MAP Roster (blue), then NOT_BLANK (yellow, catches field mismatches). The "Add to MAP Roster" rule MUST precede NOT_BLANK or it would be colored yellow.
 
 ### "Add to MAP Roster" detection (v2.8.0)
 The reverse of "Roster Addition". `compare_students` has a 3rd loop that iterates `sis_students` and flags any enrolled SIS student with no MAP row. Scoped to MANAGED campuses (the set of distinct Campus values in the MAP roster) because `alpha_roster` is a global Alpha export with hundreds of unmanaged-school students. `_is_test_account` skips obvious test rows. The SIS data is shown on Sheet 1 (so the IM sees who to add) and routed on accept to `_MapAdditionsData` -> Sheet 7 "Missing from MAP Roster". `read_handled_student_keys` includes `_MapAdditionsData` so accepted rows hide from Sheet 1.
+
+### Email-fallback matching (v2.8.4)
+Matching is Student-ID-keyed first, with EMAIL as a fallback so a blank or wrong MAP Student ID no longer breaks the match:
+- `read_map_roster` keeps blank-Student-ID rows that have an email in a `map_emailonly` list (instead of dropping them at the `if not student_id: continue` gate) and returns `all_map_emails` (every lowercased MAP email). Return signature is now `(enrolled, non_enrolled, emailonly, all_emails)` (single caller: `main`).
+- `compare_students(map_enrolled, map_non_enrolled, sis_students, map_emailonly, all_map_emails)` builds a `sis_by_email` index and: (1) Loop 1 tries `sis_by_email[email]` before declaring "Roster Addition" (catches typo'd ids); (2) a dedicated loop flags each email-only row that matches the SIS by email as a "Student ID" correction, stamped with the correct SIS id; (3) the "Add to MAP Roster" loop skips any SIS student whose email is already in `all_map_emails`.
+- Why stamp the SIS id: every email-only row has a blank MAP Student_ID, so without it they would all share the `("", "Student ID")` hide tuple and accepting one would hide them all.
+
+### Column-detection / zero-student warning (v2.8.4)
+`read_map_roster` prints `*** WARNING: '<campus>' processed 0 students out of N data rows` when a campus sheet yields no students (corrupt headers that defeat the col-A fallback, or all-blank Notes on a non-Timeback sheet), so a whole campus is never silently dropped. Known case: Reading CCSD (Dash) currently processes 0 rows (all-blank Notes). NOTE: the JHMS col-A header is '4' (imported via `IMPORTRANGE` from the source MAP Roster master, NOT editable in the JHMS tab); the existing col-A fallback handles it, so JHMS IS processed and does NOT trigger this warning.
 
 ## Data Sources
 
