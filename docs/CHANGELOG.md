@@ -1,5 +1,26 @@
 # Changelog
 
+## [v2.8.2] - 2026-05-25
+
+GHA Apps Script auto-deploy is now actually wired up. Closes the v2.8.1 audit's biggest finding (live script was 4 versions stale because the deploy workflow silently skipped every run).
+
+### Fixed
+- **`deploy-apps-script.yml` was silently skipping every run** because `CLASPRC_JSON` + `CLASP_SCRIPT_ID` were never set (the workflow is fail-soft: missing secrets log a `::warning::` and exit success). Configured both repo secrets:
+  - `CLASPRC_JSON` piped straight from the local `~/.clasprc.json` (clasp 3.x `tokens.default` schema) via `gh secret set CLASPRC_JSON < ~/.clasprc.json`. The OAuth refresh token goes to GitHub's encrypted secret store without ever touching the transcript or logs.
+  - `CLASP_SCRIPT_ID` = `16_ypoWiIFRpIZzUEpwJGLP8DvexGoCDAiXaZGKoIhRQFa38H8vcS436_`.
+- Going forward, any push to main touching `Code.js` / `appsscript.json` / `.claspignore` auto-deploys. No more manual `npm run deploy`. If the OAuth token ever expires the deploy FAILS loudly (red X) instead of silently skipping: strictly better than before. Recovery: local `clasp login`, then re-run the `gh secret set CLASPRC_JSON` pipe.
+
+### Verified (the deploy run IS the build verification; no app code changed)
+- `gh secret list` shows both `CLASPRC_JSON` + `CLASP_SCRIPT_ID` (timestamps 2026-05-25).
+- Test deploy (`gh workflow run deploy-apps-script.yml`, run 26385874847) completed in 21s with the push steps RUN, not skipped: `Check secrets configured` then `Restore clasp credentials` then `Push to Apps Script` then `Summary` all green, and the Summary emitted the `::notice::` "Apps Script deployed via clasp push to scriptId ***". A successful "Push to Apps Script" also proves the OAuth refresh token is still valid.
+- `clasp pull` of the live script confirms all 10 feature markers (handleRejectionReasonEdit_, upsertRejectionReason_, Add to MAP Roster, _MapAdditionsData, LockService). No-op push, since the live script was already current from the v2.8.1 manual deploy.
+
+### Note
+- GitHub flagged Node.js 20 action deprecation (actions/checkout@v4, actions/setup-node@v4): GitHub forces these to Node 24 on 2026-06-02. Non-blocking for now; bump the action versions before then.
+
+### Files changed
+- GHA repo secrets (`CLASPRC_JSON`, `CLASP_SCRIPT_ID`), `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
 ## [v2.8.1] - 2026-05-25
 
 Audit-driven fixes (full-pipeline /audit). No CRITICAL bugs found; these are the MEDIUM/LOW items worth fixing.
