@@ -138,7 +138,16 @@ class _OneRosterClient:
                 wait = 2**attempt
                 print(f"  [Timeback] retry {attempt + 1} after {wait}s: {e}")
                 time.sleep(wait)
-        return None
+        # v2.8.1 (audit): reached only when every attempt hit a 401/429 continue
+        # and never succeeded. Returning None here used to make get_students
+        # silently truncate pagination (treating it as "no more data"), so a
+        # persistent rate-limit dropped Vita/ScienceSIS students with no error.
+        # Raise instead so read_combined_sis_data's try/except logs it and
+        # degrades to Dash-only loudly.
+        raise RuntimeError(
+            f"Timeback _get exhausted {retries} attempts for {path} "
+            f"(persistent 401/429 with no successful response)."
+        )
 
     def get_students(self, school_id):
         """Paginate through all currently-rostered students at a school.

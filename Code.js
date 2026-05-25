@@ -101,6 +101,17 @@ function onEdit(e) {
   // rows for this student from every cumulative tab. Then, if newValue=true,
   // append one row to the target tab. This handles: accept → uncheck → reject,
   // reject → uncheck → accept, and repeated accepts (no duplicates).
+  // v2.8.1 (audit): serialize the remove+append critical section. Concurrent
+  // onEdit instances (rapid toggling, or the mutual-exclusion setValue below
+  // firing a second onEdit) could otherwise interleave and leave duplicate
+  // cumulative-tab rows. If another instance holds the lock, skip this edit;
+  // the next toggle or hourly run reconciles. The document lock auto-releases
+  // on script termination, so the explicit releaseLock below is belt-and-braces.
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(10000)) {
+    return;
+  }
+
   removeStudentFromCumulativeTabs_(ss, studentId);
 
   if (newValue === true) {
@@ -147,6 +158,8 @@ function onEdit(e) {
     // Uncheck — clear data col backgrounds only; A/B keep their permanent colors
     sheet.getRange(row, 3, 1, 13).setBackground(null);
   }
+
+  lock.releaseLock();
 }
 
 function clearCheckboxes_(sheet) {

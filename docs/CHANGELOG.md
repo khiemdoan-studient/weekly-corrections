@@ -1,5 +1,36 @@
 # Changelog
 
+## [v2.8.1] - 2026-05-25
+
+Audit-driven fixes (full-pipeline /audit). No CRITICAL bugs found; these are the MEDIUM/LOW items worth fixing.
+
+### Fixed
+- **`Code.js` onEdit race (MEDIUM, observed)**: `removeStudentFromCumulativeTabs_` + `appendRow` was not lock-protected. Concurrent onEdit instances (rapid checkbox toggling, or the mutual-exclusion `setValue(false)` firing a second onEdit) could interleave and leave DUPLICATE cumulative-tab rows. This is the mechanism behind the 2 duplicate tuples (079-10545, 083-11566) the v2.8.0 audit found. Now wrapped in `LockService.getDocumentLock().tryLock(10000)`: if another instance holds the lock the edit is skipped (next toggle / hourly run reconciles), and `releaseLock()` runs at the end (the document lock also auto-releases on script termination). Impact was cosmetic (handled_keys is a set, dedupes), but the dup rows are now prevented at the source.
+- **`timeback_sis.py::_OneRosterClient._get` silent partial failure (MEDIUM)**: on persistent 401/429 (rate-limit) across all retry attempts, `_get` returned `None`, which made `get_students` treat it as end-of-pagination (`if not data: break`) and silently return partial/empty results. `query_timeback_enrolled` then returned an incomplete dict with NO exception, so Vita/ScienceSIS students silently vanished (surfacing as Roster Additions) with nothing logged. Now raises `RuntimeError` on exhaustion, so `read_combined_sis_data`'s existing try/except logs it and degrades to Dash-only loudly. Same data outcome, far better observability. (At current scale these schools fit in one OneRoster page, so this is a robustness/observability fix, not an active data bug.)
+- **`sheets_writer.py` `_RejectionReasons` not re-hidden by the pipeline (LOW-MED)**: the tab was hidden only by the one-time v2.7.4 migration; `write_corrections` never re-hid it. Now captured as `rejection_reasons_id` and added to the hide loop (consistent with `_MapAdditionsData`). No-op if already hidden; re-hides if anyone unhides it.
+- **`sheets_writer.py:939` stale comment**: the `clear_ranges` comment said col O hydrates from `_RejectedData`; v2.7.4 moved storage to `_RejectionReasons`. Comment corrected (and a pre-existing em dash removed).
+
+### Audit dismissals (verified false positives)
+- compare_students "double-count": the `student_id in map_enrolled` guard already covers matched students.
+- MAP_HEADER_MAP "substring collision": `_detect_columns` uses exact set membership, not substring.
+- "Add to MAP Roster appends SIS to both lists": intentional v2.8.0 design (data lives in SIS).
+- compute_monday "timezone drift": `datetime.now(ZoneInfo(...))` is tz-aware.
+- Code.js deleteRow "off-by-one": cumulative tabs have no header row.
+- Shared-Drive find-or-create race: mitigated by the GHA single-flight concurrency group.
+
+### Deferred (LOW, not fixed)
+- `read_handled_student_keys` 5 sequential reads could be one `batchGet` (~1-2s; changes per-tab partial-failure semantics).
+- `alpha_roster_ctas.sql` dedup tiebreaker non-deterministic when admissionstatus + student_group both NULL (one-time/sibling export).
+- `config.py` ISR_CONFIG stale "NEEDS TO BE ADDED" comments (cosmetic).
+- Empty-week orphan files accumulate in the Shared Drive (known clutter).
+
+### Verified
+- `python -m py_compile` (timeback_sis, sheets_writer, generate_corrections, config) + `node --check Code.js` pass.
+- Regression run: 27 students written, 39.6s, no errors. `_RejectionReasons` and `_MapAdditionsData` confirmed hidden=True.
+
+### Files changed
+- `Code.js`, `timeback_sis.py`, `sheets_writer.py`, `docs/CHANGELOG.md`.
+
 ## [v2.8.0] - 2026-05-19
 
 ### Added

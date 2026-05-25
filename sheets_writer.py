@@ -899,6 +899,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
     unenroll_data_id = tab_ids["_UnenrollData"]
     rejected_data_id = tab_ids["_RejectedData"]
     map_additions_data_id = tab_ids["_MapAdditionsData"]  # v2.8.0
+    rejection_reasons_id = tab_ids["_RejectionReasons"]  # v2.7.4 (audit: ensure hidden)
     lists_id = tab_ids["_Lists"]
 
     visible_ids = [
@@ -936,12 +937,13 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         .execute()
     )
 
-    # Clear visible + data tabs (1 batched call instead of 9).
-    # v2.7.3: Sheet 6 (Rejected Changes) is cleared as A:N to PRESERVE col O
-    # ("Reason for Rejection"). Col O is hydrated from _RejectedData col O by
-    # `_hydrate_rejection_reasons` below — reasons live in _RejectedData (keyed
-    # by student_id) so they survive QUERY row reorders. Pre-v2.7.3 cleared A:Z
-    # which silently wiped every IM-typed reason on every hourly cron.
+    # Clear visible + data tabs (1 batched call).
+    # v2.7.3+: Sheet 6 (Rejected Changes) is cleared as A:N to PRESERVE col O
+    # ("Reason for Rejection"). Col O is hydrated by `_hydrate_rejection_reasons`
+    # below from the dedicated `_RejectionReasons` tab (v2.7.4 moved storage
+    # there, keyed by student_id, so reasons survive QUERY row reorders AND the
+    # cumulative-tab rebuild paths). Pre-v2.7.3 cleared A:Z which silently wiped
+    # every IM-typed reason on every hourly cron.
     clear_ranges = {
         TAB_CORRECTED: "A:Z",
         TAB_SIS: "A:Z",
@@ -1422,6 +1424,7 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         unenroll_data_id,
         rejected_data_id,
         map_additions_data_id,  # v2.8.0
+        rejection_reasons_id,  # v2.7.4 (audit fix: was relying on one-time migration to hide)
         lists_id,
     ]:
         fmt.append(
