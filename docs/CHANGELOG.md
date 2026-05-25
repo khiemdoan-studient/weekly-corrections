@@ -28,8 +28,21 @@ Audit-driven fixes (full-pipeline /audit). No CRITICAL bugs found; these are the
 - `python -m py_compile` (timeback_sis, sheets_writer, generate_corrections, config) + `node --check Code.js` pass.
 - Regression run: 27 students written, 39.6s, no errors. `_RejectionReasons` and `_MapAdditionsData` confirmed hidden=True.
 
+### Deploy gap discovered + resolved (CRITICAL, the audit's biggest catch)
+While verifying the v2.8.1 Code.js deploy, found the **live Apps Script in the corrections spreadsheet was still v2.6.0** (2026-05-01). The GHA `deploy-apps-script.yml` workflow has been **silently skipping the clasp push on every run since v2.6.0** because the `CLASPRC_JSON` / `CLASP_SCRIPT_ID` secrets were never configured. The workflow is fail-soft (logs a `::warning::` and exits success), so every run reported "success" while actually deploying nothing. Prior sessions (mine included) read that "success" as "deployed".
+
+Impact: every Apps Script change since v2.6.0 was never live:
+- v2.7.3/v2.7.4 Reason-for-Rejection onEdit bridge (`handleRejectionReasonEdit_`, `upsertRejectionReason_`): NOT live. New reasons IMs typed on Sheet 6 col O since 2026-05-08 were never captured to `_RejectionReasons`; the Python hydration only ever surfaced the 11 reasons from the one-time migration. Any newly-typed reason was effectively dropped on the next pipeline run.
+- v2.8.0 "Add to MAP Roster" accept routing + `_MapAdditionsData`: NOT live. An accepted Add-to-MAP row would have fallen through to `_ApprovedData` (wrong tab). No damage yet (Sheet 7 had 0 accepted rows).
+- v2.8.1 onEdit lock: NOT live (just shipped).
+
+Resolution: ran `npm run deploy` locally (clasp is configured on this machine: `.clasp.json` + `~/.clasprc.json`). Pushed the current Code.js. Verified via `clasp pull` into a temp dir: all feature markers now present in the live script (handleRejectionReasonEdit_, upsertRejectionReason_, Add to MAP Roster, _MapAdditionsData, LockService). The Reason bridge + Add-to-MAP routing + lock are finally live.
+
+### User action required (prevent recurrence)
+Configure the two GitHub secrets so the auto-deploy actually pushes (per README "Apps Script auto-deploy setup"): `CLASPRC_JSON` (contents of `~/.clasprc.json`) + `CLASP_SCRIPT_ID` (`16_ypoWiIFRpIZzUEpwJGLP8DvexGoCDAiXaZGKoIhRQFa38H8vcS436_`). Until then, run `npm run deploy` locally after ANY Code.js change. (Note: the live header comment still reads v2.8.0; the v2.8.1 lock code IS present. Cosmetic, will sync on next Code.js change.)
+
 ### Files changed
-- `Code.js`, `timeback_sis.py`, `sheets_writer.py`, `docs/CHANGELOG.md`.
+- `Code.js`, `timeback_sis.py`, `sheets_writer.py`, `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
 
 ## [v2.8.0] - 2026-05-19
 
