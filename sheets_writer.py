@@ -856,6 +856,117 @@ def _hydrate_rejection_reasons(sheets_service, spreadsheet_id):
     )
 
 
+def _capture_typed_reasons(sheets_service, spreadsheet_id):
+    """Capture IM-typed reasons on Sheet 6 col O INTO `_RejectionReasons`
+    BEFORE the rebuild can overwrite them (v2.8.3).
+
+    This is the pipeline-side safety net that makes reason persistence
+    independent of the onEdit Apps Script bridge. The onEdit handler
+    (`handleRejectionReasonEdit_` -> `upsertRejectionReason_`) is the fast
+    path, but it is a single point of failure: when the live Apps Script
+    was stale (2026-05-08..2026-05-25) the bridge was dead, so reasons IMs
+    typed into col O were never saved to `_RejectionReasons`, and the hourly
+    `_hydrate_rejection_reasons` overwrote them with blanks within the hour.
+
+    Reading col O here, at the START of write_corrections (BEFORE the A:N
+    batchClear wipes col M and the QUERY reorders rows), lets us upsert any
+    non-blank reason still aligned to its student_id into the durable
+    `_RejectionReasons` tab. `_hydrate_rejection_reasons` then re-renders
+    col O from the now-complete store. Result: a reason typed since the last
+    run survives the next run even if onEdit never fired.
+
+    Only non-blank reasons are written. A deliberate clear via the live
+    onEdit still works (it sets col B blank in `_RejectionReasons`); this
+    capture never writes a blank over a stored reason, erring toward
+    preservation.
+
+    MUST be called before the Sheet 6 A:N batchClear in write_corrections
+    (the clear blanks col M, which orphans col O).
+    """
+    # Read Sheet 6 col M (student_id) + col O (reason), still row-aligned to
+    # the PREVIOUS render. FORMATTED_VALUE forces the QUERY in A7 to compute.
+    resp = _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{TAB_REJECTED}'!M7:O",
+            valueRenderOption="FORMATTED_VALUE",
+        )
+        .execute(),
+        label="capture: read Sheet 6 M7:O",
+    )
+    captured = {}
+    for row in resp.get("values", []):
+        sid = str(row[0] or "").strip() if len(row) >= 1 else ""
+        reason = str(row[2] or "").strip() if len(row) >= 3 else ""
+        if sid and reason:
+            captured[sid] = reason  # last non-blank wins within this render
+    if not captured:
+        return
+
+    # Read the current durable store: A=student_id, B=reason (no header).
+    rsn_resp = _retry_api(
+        lambda: sheets_service.spreadsheets()
+        .values()
+        .get(spreadsheetId=spreadsheet_id, range="'_RejectionReasons'!A:B")
+        .execute(),
+        label="capture: read _RejectionReasons",
+    )
+    stored = {}  # sid -> (0-based row index in A:B, stored reason)
+    for i, row in enumerate(rsn_resp.get("values", [])):
+        sid = str(row[0] or "").strip() if len(row) >= 1 else ""
+        reason = str(row[1] or "").strip() if len(row) >= 2 else ""
+        if sid and sid not in stored:
+            stored[sid] = (i, reason)
+
+    updates = []  # (a1_range, value) for in-place col-B changes
+    appends = []  # [sid, reason] brand-new rows
+    for sid, reason in captured.items():
+        if sid in stored:
+            idx, old = stored[sid]
+            if old != reason:
+                updates.append((f"'_RejectionReasons'!B{idx + 1}", reason))
+        else:
+            appends.append([sid, reason])
+
+    if not updates and not appends:
+        return  # everything already stored (onEdit caught it, or no change)
+
+    if updates:
+        data = [{"range": rng, "values": [[val]]} for rng, val in updates]
+        _retry_api(
+            lambda: sheets_service.spreadsheets()
+            .values()
+            .batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body={"valueInputOption": "RAW", "data": data},
+            )
+            .execute(),
+            label="capture: update _RejectionReasons",
+        )
+    if appends:
+        _retry_api(
+            lambda: sheets_service.spreadsheets()
+            .values()
+            .append(
+                spreadsheetId=spreadsheet_id,
+                range="'_RejectionReasons'!A:B",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": appends},
+            )
+            .execute(),
+            label="capture: append _RejectionReasons",
+        )
+
+    print(
+        f"  Captured {len(updates) + len(appends)} newly-typed reason(s) into "
+        f"_RejectionReasons before hydrate ({len(updates)} updated, "
+        f"{len(appends)} new)."
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # MAIN WRITE FUNCTION
 # ══════════════════════════════════════════════════════════════════════════
@@ -911,6 +1022,12 @@ def write_corrections(sheets_service, corrections_map, corrections_sis):
         sheet6_id,
         sheet7_id,
     ]
+
+    # ── v2.8.3: Capture IM-typed reasons BEFORE any clear/reorder ──────
+    # Pipeline-side safety net so col O ("Reason for Rejection") persists even
+    # if the onEdit bridge is dead. MUST run before the Sheet 6 A:N batchClear
+    # below, which wipes col M and orphans col O.
+    _capture_typed_reasons(sheets_service, sid)
 
     # ── Clear banding + conditional formatting + data ─────────────────
     _clear_banding(sheets_service, sid, visible_ids)

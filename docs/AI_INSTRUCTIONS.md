@@ -98,9 +98,10 @@ Same as Sheets 3-5 but with extra "Reason for Rejection" column (col O, manual e
 
 **v2.7.4 architecture — Reason persistence (separate-tab storage)**: col O on Sheet 6 is user-editable. The reason itself lives in a dedicated hidden tab `_RejectionReasons` (2 cols: `student_id`, `reason`). Decoupled from the 4 cumulative tabs.
 
-Two-way bridge:
-- **Write path**: `Code.js::handleRejectionReasonEdit_` fires on Sheet 6 col O edits. Calls `upsertRejectionReason_(ss, studentId, reason)` which finds-or-appends in `_RejectionReasons`.
-- **Read path**: each pipeline run, `sheets_writer.py::_hydrate_rejection_reasons` reads `_RejectionReasons` A:B and writes Sheet 6 col O aligned to the QUERY-rendered student_id order in col M.
+Persistence has THREE guards (v2.8.3 added the third):
+- **Write path (onEdit, fast)**: `Code.js::handleRejectionReasonEdit_` fires on Sheet 6 col O edits. Calls `upsertRejectionReason_(ss, studentId, reason)` which finds-or-appends in `_RejectionReasons`.
+- **Capture path (pipeline, safety net, v2.8.3)**: `sheets_writer.py::_capture_typed_reasons` runs at the START of `write_corrections`, BEFORE any clear/reorder. It reads Sheet 6 `M7:O` (sid + reason, still row-aligned to the prior render) and upserts any non-blank reason into `_RejectionReasons`. This makes persistence INDEPENDENT of the onEdit script: even if the live Apps Script is stale/dead (as it was 2026-05-08 to 2026-05-25), a reason typed since the last run is captured before the rebuild can overwrite it. Only non-blank reasons are written (never blanks-over-stored), so it never fights a deliberate onEdit clear.
+- **Read path (hydrate)**: each pipeline run, `sheets_writer.py::_hydrate_rejection_reasons` reads `_RejectionReasons` A:B and writes Sheet 6 col O aligned to the QUERY-rendered student_id order in col M.
 
 Why a separate tab (the v2.7.4 fix): pre-v2.7.4 stored reasons in `_RejectedData` col O. That left them exposed to 3 destructive paths:
 - `_realign_row` truncates rows to 14 cols when migration runs
@@ -109,7 +110,9 @@ Why a separate tab (the v2.7.4 fix): pre-v2.7.4 stored reasons in `_RejectedData
 
 `_RejectionReasons` is touched by NO existing rebuild path. Reasons survive Reject toggles, migrations, backfills, and pipeline rebuilds.
 
-`_RejectedData` reverts to 14 cols (no Reason col). The 11 v2.7.3-era reasons stored on `_RejectedData` col O are dead-data after the v2.7.4 migration — harmless, never read by v2.7.4 code.
+`_RejectedData` reverts to 14 cols (no Reason col). The 11 v2.7.3-era reasons stored on `_RejectedData` col O are dead-data after the v2.7.4 migration: harmless, never read by v2.7.4 code.
+
+**Recovery limits (v2.8.3 finding)**: reasons typed while the onEdit bridge was dead (2026-05-08 to 2026-05-25) and never captured are largely UNRECOVERABLE. Probed exhaustively: Google Drive retains only ~3 days of revisions for this heavily-edited file (everything before 2026-05-22 was pruned), the Sheets UI Version History draws from the same pruned set, and the weekly snapshot files never stored col O. A full scan of all 39 retained revisions recovered 0 reasons beyond the 11 already in `_RejectionReasons`. The only remaining source is an external copy (a user-downloaded xlsx), ingested via `restore_rejection_reasons.py`. The v2.8.3 capture path prevents recurrence.
 
 ### Real-Time Unenroll Queue (Live) Sheet
 A 7th visible sheet in the corrections spreadsheet that shows IM-flagged students from all 9 campuses in real-time (~1 min latency). Built by `build_unenroll_queue.py`.

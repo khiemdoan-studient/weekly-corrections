@@ -1,5 +1,27 @@
 # Changelog
 
+## [v2.8.3] - 2026-05-25
+
+Bulletproof "Reason for Rejection" persistence: a pipeline-side capture step so typed reasons survive every refresh even if the onEdit Apps Script bridge is dead.
+
+### Added
+- **`sheets_writer.py::_capture_typed_reasons`** + a call at the start of `write_corrections` (before any clear/reorder). It reads Sheet 6 `M7:O` (student_id + reason, still aligned to the prior render) and upserts any non-blank reason into the durable `_RejectionReasons` tab BEFORE the A:N batchClear can orphan col O. `_hydrate_rejection_reasons` then re-renders col O from the now-complete store.
+  - This is the THIRD persistence guard, joining the onEdit write path (`handleRejectionReasonEdit_` / `upsertRejectionReason_`) and the hydrate read path. Crucially it makes reason persistence INDEPENDENT of the Apps Script. The root cause of the repeated wipes was the onEdit bridge being dead from 2026-05-08 to 2026-05-25 (the stale-deploy gap fixed in v2.8.1/v2.8.2), during which typed reasons were never saved and the hourly hydrate overwrote col O with blanks within the hour.
+  - Only non-blank reasons are written (never a blank over a stored reason), so the capture never fights a deliberate clear made through the live onEdit.
+
+### Verified (live end-to-end, the decisive proof)
+- Wrote a unique marker reason directly via the Sheets API to a rejected student's col O (sid 086-12777). This SIMULATES a reason typed while onEdit is dead (API writes do not fire onEdit). Ran the full `generate_corrections.py`. Result: the pipeline logged "Captured 1 newly-typed reason(s) into _RejectionReasons before hydrate", the marker persisted in `_RejectionReasons`, AND survived on Sheet 6 col O after the rebuild. Snapshot/restore cleanup returned `_RejectionReasons` to its exact 11 rows. TEST RESULT: PASS.
+- `python -m py_compile sheets_writer.py generate_corrections.py` passes.
+
+### Recovery of older wiped reasons (investigated, mostly unrecoverable)
+- Exhaustive probe: 11 reasons survive in `_RejectionReasons`. All 39 retained Google Drive revisions of the corrections sheet were downloaded and scanned, recovering 0 reasons beyond the 11. Drive prunes aggressively for this heavily-edited file: only 2026-05-22 to 2026-05-25 is retained (everything earlier is gone), the Sheets UI Version History draws from the same pruned set, and the weekly snapshot files never stored col O. Pre-2026-05-22 reasons that were never durably saved are unrecoverable except from an external copy, which `restore_rejection_reasons.py` can still ingest.
+
+### Investigated, no change (ScienceSIS "in MAP not SIS" report)
+- 10 ScienceSIS students a user could not find in the SIS are all currently Enrolled per the OneRoster API. They sit in `_UnenrollData` because an IM flagged them to leave (2026-05-07 x2, 2026-05-13 x8 in one batch) while still Enrolled in the SIS. "Unenrolling" is working as designed: `compare_students` requires SIS admissionstatus==enrolled to flag it, and a student MISSING from OneRoster becomes "Roster Addition", not "Unenrolling". The alpha_roster BQ returning 0 for them is expected (ScienceSIS lives in OneRoster, not that export). No code change.
+
+### Files changed
+- `sheets_writer.py`, `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
 ## [v2.8.2] - 2026-05-25
 
 GHA Apps Script auto-deploy is now actually wired up. Closes the v2.8.1 audit's biggest finding (live script was 4 versions stale because the deploy workflow silently skipped every run).
