@@ -40,10 +40,31 @@ SUMMER_TABS = [
     "Hardeeville Junior & Senior High School (Dash)",
     "Hardeeville Elementary School (Dash)",
     "Ridgeland Secondary Academy of Excellence (Dash)",
+    "Allendale Fairfax Middle School (Dash)",  # v2.9.1
 ]
 
 SR_TAB = "Student Roster"
 MR_TAB = "MAP Roster"
+
+# Combined view tab (v2.9.1): every Summer School = TRUE row from all SUMMER_TABS.
+ROSTER_TAB = "Summer School Roster"
+# Core A:N columns are identical across all CMR campus tabs (the IMPORTRANGE core).
+CORE_HEADERS = [
+    "Student ID",
+    "Student Email",
+    "Campus",
+    "NWEA Account",
+    "Last Name",
+    "First Name",
+    "Grade",
+    "Level",
+    "DOB",
+    "Gender",
+    "Accommodations",
+    "Subjects",
+    "Start Date",
+    "Notes",
+]
 
 
 def col_letter(i):
@@ -308,10 +329,108 @@ def build_sheets_service():
     return build("sheets", "v4", credentials=creds)
 
 
+def build_summer_roster_tab(sheets):
+    """(Re)build the combined ROSTER_TAB on the CMR: every Summer School = TRUE
+    row from all SUMMER_TABS, normalized to core A:N + the 5 summer columns.
+
+    Robust to per-school layout differences: each school's summer columns sit at
+    different absolute positions (e.g. AE..AI on the 39-col Jasper tabs, AD..AH
+    on the 29-col AFMS tab), so we bring each school's summer block to a fixed
+    output position via a per-school horizontal join {core, summer}. The summer
+    flag is then always output column 15, which one QUERY filters on.
+    """
+    blocks = []
+    for tab in SUMMER_TABS:
+        pos = read_summer_positions(sheets, MAP_SPREADSHEET_ID, tab)
+        if len(pos) < len(SUMMER_HEADERS):
+            print(f"  [SKIP roster] {tab}: summer cols not provisioned")
+            continue
+        flag = min(pos.values())
+        s0 = col_letter(flag)
+        s1 = col_letter(flag + len(SUMMER_HEADERS) - 1)
+        blocks.append(f"{{'{tab}'!A2:N, '{tab}'!{s0}2:{s1}}}")
+    query = (
+        "=QUERY({"
+        + "; ".join(blocks)
+        + '}, "where Col15 = true order by Col3, Col5", 0)'
+    )
+
+    meta = (
+        sheets.spreadsheets()
+        .get(
+            spreadsheetId=MAP_SPREADSHEET_ID, fields="sheets.properties(title,sheetId)"
+        )
+        .execute()
+    )
+    existing = {
+        s["properties"]["title"]: s["properties"]["sheetId"] for s in meta["sheets"]
+    }
+    if ROSTER_TAB in existing:
+        gid = existing[ROSTER_TAB]
+        sheets.spreadsheets().values().clear(
+            spreadsheetId=MAP_SPREADSHEET_ID, range=f"'{ROSTER_TAB}'!A:AZ"
+        ).execute()
+    else:
+        resp = (
+            sheets.spreadsheets()
+            .batchUpdate(
+                spreadsheetId=MAP_SPREADSHEET_ID,
+                body={
+                    "requests": [
+                        {
+                            "addSheet": {
+                                "properties": {
+                                    "title": ROSTER_TAB,
+                                    "index": 1,
+                                    "gridProperties": {
+                                        "rowCount": 2000,
+                                        "columnCount": 24,
+                                        "frozenRowCount": 1,
+                                    },
+                                }
+                            }
+                        }
+                    ]
+                },
+            )
+            .execute()
+        )
+        gid = resp["replies"][0]["addSheet"]["properties"]["sheetId"]
+
+    header = CORE_HEADERS + SUMMER_HEADERS
+    sheets.spreadsheets().values().batchUpdate(
+        spreadsheetId=MAP_SPREADSHEET_ID,
+        body={
+            "valueInputOption": "USER_ENTERED",
+            "data": [
+                {"range": f"'{ROSTER_TAB}'!A1", "values": [header]},
+                {"range": f"'{ROSTER_TAB}'!A2", "values": [[query]]},
+            ],
+        },
+    ).execute()
+    sheets.spreadsheets().batchUpdate(
+        spreadsheetId=MAP_SPREADSHEET_ID,
+        body={
+            "requests": [
+                {
+                    "repeatCell": {
+                        "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1},
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                        "fields": "userEnteredFormat.textFormat.bold",
+                    }
+                }
+            ]
+        },
+    ).execute()
+    print(
+        f"  [OK] '{ROSTER_TAB}' rebuilt: {len(blocks)} school(s), core A:N + 5 summer cols"
+    )
+
+
 def main():
     start = time.time()
     print("=" * 70)
-    print("  SUMMER SCHOOL COLUMN PROVISIONING (v2.9.0)")
+    print("  SUMMER SCHOOL COLUMN PROVISIONING (v2.9.1)")
     print("=" * 70)
     sheets = build_sheets_service()
     for tab in SUMMER_TABS:
@@ -320,6 +439,8 @@ def main():
         sr_pos = provision_sr(sheets, isr_id)
         mr_pos = provision_mr(sheets, isr_id, sr_pos)
         provision_cmr(sheets, tab, isr_id, mr_pos)
+    print("\n--- Combined Summer School Roster tab ---")
+    build_summer_roster_tab(sheets)
     print(f"\n  Completed in {time.time() - start:.1f}s")
     print("  If the CMR shows #REF! on the new cols, open the CMR once and click")
     print("  'Allow access' per ISR (IMPORTRANGE auth; already granted for these")

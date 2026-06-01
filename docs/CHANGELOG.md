@@ -1,5 +1,21 @@
 # Changelog
 
+## [v2.9.1] - 2026-05-25
+
+Add AFMS (Allendale Fairfax Middle School) to summer school, and codify the combined Summer School Roster tab.
+
+### Added
+- **AFMS added to `SUMMER_TABS`** in `setup_summer_school_columns.py`. Provisioning is layout-aware (find-or-append by header), so AFMS's narrower 29-col CMR tab gets its summer columns at SR AB..AF / MR AC..AG / CMR AD..AH (vs the Jasper schools' SR AC..AG / MR+CMR AE..AI). All 24 provided AFMS students matched existing roster rows (incl. variants Clarke Antoine -> Antoine Clark, Sanders Zayala -> Zayla Sanders, Osborne Ezekiel -> Ezekiel Osborn); 0 ambiguous, 0 unmatched.
+- AFMS specifics vs the Jasper schools: per-student subject ("Language" for Lang, "Math" for Math) instead of the uniform "Language and Fast Math"; no teacher (blank, like Ridgeland); grade = provided (6/7/8).
+- **`build_summer_roster_tab()`** codifies the combined `Summer School Roster` tab (previously created ad-hoc) into the script. One live QUERY over all `SUMMER_TABS`, normalized to core A:N + the 5 summer columns via a per-school `{core, summer}` horizontal join, so the summer flag is always output column 15 and ONE QUERY (`where Col15 = true`) filters across schools regardless of their differing absolute summer-column positions. Re-run the script to refresh after the school list changes.
+
+### Verified
+- `python -m py_compile setup_summer_school_columns.py` passes; provisioning idempotent (3 existing schools unchanged, AFMS added, combined tab rebuilt) in ~26s.
+- Live: combined `Summer School Roster` = 242 rows (AFMS 24, JHES 24, JHMS 53, JRHS 141), every row Summer School = TRUE (the normalized QUERY handles both the 39-col Jasper and 29-col AFMS layouts). AFMS samples show correct subject (Language/Math) and grade as plain numbers.
+
+### Files changed
+- `setup_summer_school_columns.py`, `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
 ## [v2.9.0] - 2026-05-25
 
 Summer School columns across the roster chain (ISR -> MAP Roster -> Combined MAP Roster) for 3 Jasper schools.

@@ -329,15 +329,17 @@ Per-campus column positions are hard-coded in `config.py::ISR_CONFIG` with keys:
 
 All 9 campuses are listed, each with their own SR/MR Unenroll column indices (positions vary because column layouts differ across campus sheets).
 
-## Summer School Columns (v2.9.0)
+## Summer School Columns (v2.9.0; AFMS + combined tab v2.9.1)
 
-Summer school enrollment is tracked with 5 columns appended (after Unenroll) at each layer of the chain, for the 3 summer-school campuses only (JHMS, JHES, JRHS). Provisioned by `setup_summer_school_columns.py` (idempotent), which mirrors the Unenroll precedent:
+Summer school enrollment is tracked with 5 columns appended (after Unenroll) at each layer of the chain, for the 4 summer-school campuses: JHMS, JHES, JRHS (Jasper) and AFMS (Allendale, added v2.9.1). Provisioned by `setup_summer_school_columns.py` (idempotent, find-or-append by header so column positions adapt per campus), which mirrors the Unenroll precedent:
 
 - **SR** cols AC..AG: `Summer School` (checkbox) + `Summer School Teacher Email` + `Summer School Teacher` + `Summer School Grade` + `Summer School Subjects`. Typed source; IMs (or the one-time loader) fill the rows.
 - **MR** cols AE..AI: `=ARRAYFORMULA('Student Roster'!<col>2:<col>)` mirrors of the SR columns.
 - **CMR** cols AE..AI: `=IMPORTRANGE(ISR,"MAP Roster!<col>2:<col>")` of the MR columns. Same `Allow access` note as Unenroll (already authorized for these ISR->CMR pairs).
 
-Data flow is identical to Unenroll: `SR (typed) -> MR (arrayformula) -> CMR (importrange)`. The grade column is set to plain NUMBER format (appended cells otherwise inherit a date format and show grades as `01/07/1900`). Subjects is "Language and Fast Math" for all 3 (Jasper/JCSD).
+Data flow is identical to Unenroll: `SR (typed) -> MR (arrayformula) -> CMR (importrange)`. The grade column is set to plain NUMBER format (appended cells otherwise inherit a date format and show grades as `01/07/1900`). Subjects: "Language and Fast Math" for the 3 Jasper schools; per-student "Language" or "Math" for AFMS. Column POSITIONS vary by campus (find-or-append, never hardcoded): Jasper (39-col CMR) at SR AC..AG / MR+CMR AE..AI; AFMS (29-col CMR) at SR AB..AF / MR AC..AG / CMR AD..AH.
+
+**Combined view (v2.9.1)**: `build_summer_roster_tab()` (re)builds the `Summer School Roster` tab on the CMR: one live QUERY over all `SUMMER_TABS`, normalized to core A:N + the 5 summer columns. Each school's summer block is brought to a fixed output position via a per-school `{core, summer}` horizontal join, so the flag is always output Col15 and ONE QUERY (`where Col15 = true`) filters across all schools regardless of their differing absolute summer-column positions. Re-run `setup_summer_school_columns.py` to refresh it after the school list changes (242 rows across 4 schools as of v2.9.1).
 
 Per-student VALUES are NOT in the repo: the provided summer rosters are student PII, loaded once via a gitignored `_scratch_*` script (deleted after the run). That loader fuzzy-matches the name-only lists to existing SR rows (clean fuzzy-subset with a 3+token fallback, uniqueness-gated) and writes only confident unique matches; ambiguous/unmatched names are reported for manual review, never guessed, and no new roster rows are created. To re-load or extend, re-provision then re-run a fresh scratch loader.
 
