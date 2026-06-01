@@ -1,5 +1,21 @@
 # Changelog
 
+## [v2.9.2] - 2026-05-25
+
+Add JRES (Ridgeland Elementary School) to summer school.
+
+### Added
+- **JRES added to `SUMMER_TABS`**. Standard 39-col Jasper layout, so summer cols land at SR AC..AG / MR+CMR AE..AI. All 20 provided students matched existing roster rows (incl. variants Axel Santos Lopez -> Axel Lopez Santos, Miirian -> Mirian Diaz Pinto, Shania Delonila -> Shania Deonilla, and Ava Deloach -> Avah Deloach via the new lenient tier); 0 ambiguous, 0 unmatched.
+- JRES is Jasper: Subjects = "Language and Fast Math" (uniform), no teacher (blank), grade = provided (4/5). Parent / contact / transportation columns from the source list were disregarded per request.
+- **Lenient match fallback tier** in the loader: fires ONLY when the strict matcher (clean fuzzy-subset + 3+token) returns zero candidates, allowing short first-name typos (prefix, len diff <=1, e.g. "Ava" -> "Avah") to pair when the surname matches exactly and the result is unique. Strict matches keep precedence, so no regression to existing clean matches.
+
+### Verified
+- `python -m py_compile` passes; provisioning idempotent (4 existing schools unchanged, JRES added, combined tab rebuilt) in ~34s.
+- Live: combined `Summer School Roster` = 263 rows across 5 schools (AFMS 24, JHES 25, JHMS 53, JRES 20, JRHS 141), every row Summer School = TRUE; JRES samples show grade + "Language and Fast Math".
+
+### Files changed
+- `setup_summer_school_columns.py`, `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
 ## [v2.9.1] - 2026-05-25
 
 Add AFMS (Allendale Fairfax Middle School) to summer school, and codify the combined Summer School Roster tab.
