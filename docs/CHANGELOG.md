@@ -1,5 +1,27 @@
 # Changelog
 
+## [v2.9.0] - 2026-05-25
+
+Summer School columns across the roster chain (ISR -> MAP Roster -> Combined MAP Roster) for 3 Jasper schools.
+
+### Added
+- **`setup_summer_school_columns.py`** (idempotent provisioner, mirrors `setup_unenroll_columns.py`). For the 3 summer-school campuses (JHMS Hardeeville Jr/Sr, JHES Hardeeville Elementary, JRHS Ridgeland Secondary) it appends 5 columns AFTER the existing last-used column at each layer (nothing existing shifts):
+  - **Student Roster (SR)**: `Summer School` (checkbox) + `Summer School Teacher Email` + `Summer School Teacher` + `Summer School Grade` + `Summer School Subjects`. Typed source data.
+  - **MAP Roster (MR)**: same 5 as `=ARRAYFORMULA('Student Roster'!<col>2:<col>)` mirrors (matches the existing MR column style).
+  - **Combined MAP Roster (CMR)**: same 5 as `=IMPORTRANGE(ISR,"MAP Roster!<col>2:<col>")` (the Unenroll precedent). Appended at cols AE..AI on all 3 campus tabs.
+  - The grade column is forced to plain NUMBER format (appended cells otherwise inherited a date format and rendered grades like `01/07/1900`).
+- One-time data load (via a gitignored `_scratch_*` loader; student PII never committed) set the flag + teacher + grade + subjects for the provided students. Subjects = "Language and Fast Math" for all 3 (all Jasper/JCSD). Teachers: JHMS per-student (Janice Allen / Tashanique Douglas / Avlen Edwards), JHES Mahogany Salisbury / Queenie Henry, JRHS left blank per request. JHES summer grade taken from each student's existing roster grade (the provided list gave only teacher bands).
+
+### Matching (names -> existing roster rows)
+The provided students were name-only (no IDs) and mostly already in each roster under fuller/variant names (compound surnames, middle names, hyphenation, occasional typos). Matcher: normalize (NFKD ascii, lowercase, strip punctuation, drop <=1-char middle initials) then a clean fuzzy-subset match (one token set is a fuzzy subset of the other, >=2 shared, unique) with a fallback for 3+token names sharing >=2 tokens (one mismatched token each side, e.g. "Ivan Dario Funez" -> "Ivan D Funez Banegas"). Clean matches take precedence; uniqueness is required, so any over-match becomes ambiguous and is never written. Result: **213 written, 3 ambiguous, 11 unmatched** (reported for manual review; no new roster rows created, no guesses).
+
+### Verified
+- `python -m py_compile setup_summer_school_columns.py` passes; provisioning idempotent (ran twice clean).
+- Live SR -> MR -> CMR propagation confirmed on sample students per school (flag TRUE, correct teacher/grade/subjects; grade displays as a plain number; non-summer students blank; existing Unenroll column untouched).
+
+### Files changed
+- `setup_summer_school_columns.py` (new), `.gitignore` (add `_scratch_*`), `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
 ## [v2.8.4] - 2026-05-25
 
 Email-fallback matching so students who are in both MAP and SIS but missing their MAP Student ID stop showing as false "Add to MAP Roster", plus a loud warning when a campus sheet yields zero students.

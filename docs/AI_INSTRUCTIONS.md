@@ -31,6 +31,7 @@ v2.8.0 adds a reverse-direction check: students enrolled in the SIS with no MAP 
 | `run_export.ps1` | ~70 | One-time: Athena CTAS → S3 → GCS → BQ for alpha_roster |
 | `alpha_roster_ctas.sql` | ~30 | Athena SQL with dedup, handles reserved word "group" |
 | `setup_unenroll_columns.py` | ~150 | One-time: provision Unenroll columns on all 9 ISRs + CMR. Idempotent — safe to re-run |
+| `setup_summer_school_columns.py` | ~280 | v2.9.0: provision the 5 Summer School columns (SR + MR + CMR) for the 3 summer-school campuses. Idempotent find-or-create by header; mirrors `setup_unenroll_columns.py`. PII-free (student values loaded separately) |
 | `build_unenroll_queue.py` | ~250 | One-time: create/refresh "Unenroll Queue (Live)" tab on corrections sheet with per-campus QUERY+IMPORTRANGE formulas. Idempotent. |
 | `.github/workflows/hourly-pipeline.yml` | ~40 | GitHub Actions cron: runs `generate_corrections.py` every hour at :00 UTC. Uses `GCP_SA_KEY` secret. |
 | `normalize_dates.py` | ~130 | One-time: normalize date column A in cumulative tabs to canonical `yyyy-MM-dd HH:mm:ss`. Idempotent. Handles both `M/D/YYYY H:MM:SS` and ISO inputs. |
@@ -327,6 +328,18 @@ Per-campus column positions are hard-coded in `config.py::ISR_CONFIG` with keys:
 - `mr_unenroll_col` — 0-indexed column position of Unenroll on the MR tab
 
 All 9 campuses are listed, each with their own SR/MR Unenroll column indices (positions vary because column layouts differ across campus sheets).
+
+## Summer School Columns (v2.9.0)
+
+Summer school enrollment is tracked with 5 columns appended (after Unenroll) at each layer of the chain, for the 3 summer-school campuses only (JHMS, JHES, JRHS). Provisioned by `setup_summer_school_columns.py` (idempotent), which mirrors the Unenroll precedent:
+
+- **SR** cols AC..AG: `Summer School` (checkbox) + `Summer School Teacher Email` + `Summer School Teacher` + `Summer School Grade` + `Summer School Subjects`. Typed source; IMs (or the one-time loader) fill the rows.
+- **MR** cols AE..AI: `=ARRAYFORMULA('Student Roster'!<col>2:<col>)` mirrors of the SR columns.
+- **CMR** cols AE..AI: `=IMPORTRANGE(ISR,"MAP Roster!<col>2:<col>")` of the MR columns. Same `Allow access` note as Unenroll (already authorized for these ISR->CMR pairs).
+
+Data flow is identical to Unenroll: `SR (typed) -> MR (arrayformula) -> CMR (importrange)`. The grade column is set to plain NUMBER format (appended cells otherwise inherit a date format and show grades as `01/07/1900`). Subjects is "Language and Fast Math" for all 3 (Jasper/JCSD).
+
+Per-student VALUES are NOT in the repo: the provided summer rosters are student PII, loaded once via a gitignored `_scratch_*` script (deleted after the run). That loader fuzzy-matches the name-only lists to existing SR rows (clean fuzzy-subset with a 3+token fallback, uniqueness-gated) and writes only confident unique matches; ambiguous/unmatched names are reported for manual review, never guessed, and no new roster rows are created. To re-load or extend, re-provision then re-run a fresh scratch loader.
 
 ## Unenroll Workflow (option-C precedence)
 

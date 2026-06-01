@@ -32,3 +32,6 @@ desktop.ini
 
 # Environment
 .env
+
+# Scratch / throwaway scripts (may contain student PII — NEVER commit)
+_scratch_*
