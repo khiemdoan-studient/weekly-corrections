@@ -1,5 +1,21 @@
 # Changelog
 
+## [v2.9.3] - 2026-05-25
+
+Add AFES (Allendale Fairfax Elementary School) to summer school, rule-based.
+
+### Added
+- **AFES added to `SUMMER_TABS`** (6th summer school). Unlike the other schools (provided name lists), AFES was a RULE: flag every AFES Student Roster student whose Admission Status = "Enrolled" ("in the MAP roster AND enrolled in our system"). 153 enrolled flagged (grades 3/4/5 = 45/63/45); 1 "former student" and 0 test accounts skipped. No name-matching needed (the students ARE the roster rows).
+- AFES specifics: teacher unknown -> blank; Summer School Grade = each student's CURRENT grade (col D); Subjects = "Language and Math" (AFES is Allendale). 29-col CMR layout -> summer cols at SR AB..AF / MR AC..AG / CMR AD..AH (find-or-append).
+- The AFES loader is idempotent + rule-based (clears the summer cols, re-flags the current enrolled set), so re-running tracks enrollment changes.
+
+### Verified
+- `python -m py_compile` passes; provisioning idempotent (5 existing schools unchanged, AFES added, combined tab rebuilt) in ~54s.
+- Live: combined `Summer School Roster` = 416 rows across 6 schools (AFES 153, AFMS 24, JHES 25, JHMS 53, JRES 20, JRHS 141), every row Summer School = TRUE; AFES samples show current grade + "Language and Math" + blank teacher.
+
+### Files changed
+- `setup_summer_school_columns.py`, `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
 ## [v2.9.2] - 2026-05-25
 
 Add JRES (Ridgeland Elementary School) to summer school.
