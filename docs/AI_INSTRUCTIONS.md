@@ -329,7 +329,7 @@ Per-campus column positions are hard-coded in `config.py::ISR_CONFIG` with keys:
 
 All 9 campuses are listed, each with their own SR/MR Unenroll column indices (positions vary because column layouts differ across campus sheets).
 
-## Summer School Columns (v2.9.0-2.9.5; 6 schools, email-keyed)
+## Summer School Columns (v2.9.0-2.9.6; 6 schools, email-keyed)
 
 Summer school enrollment is tracked with 5 columns at each layer of the chain, for the 6 summer-school campuses: JHMS, JHES, JRHS, JRES (Jasper) and AFMS, AFES (Allendale). Provisioned by `setup_summer_school_columns.py` (idempotent, find-or-append by header so positions adapt per campus).
 
@@ -343,7 +343,9 @@ Why email-keyed: the SR re-sorts (sticky-sorted Table), which detached the old S
 
 Subjects: "Language and Fast Math" for the 4 Jasper schools; per-student "Language"/"Math" for AFMS; "Language and Math" for AFES. Grade: the source list's grade where given, else the roster grade (JHES, AFES, Sara Velasquez). Grade column is plain NUMBER format. Positions vary by campus (find-or-append): Jasper 39-col CMR at SR AC..AG / MR+CMR AE..AI; Allendale 29-col CMR at SR AB..AF / MR AC..AG / CMR AD..AH.
 
-**Combined view**: `build_summer_roster_tab()` (re)builds the `Summer School Roster` tab on the CMR: one live QUERY over all `SUMMER_TABS`, normalized to core A:N + the 5 summer columns via a per-school `{core, summer}` horizontal join, so the flag is always output Col15 and one QUERY (`where Col15 = true`) filters across schools regardless of differing positions. 415 rows across 6 schools as of v2.9.5. Re-run `setup_summer_school_columns.py` after the school list changes.
+**Combined view**: `build_summer_roster_tab()` (re)builds the `Summer School Roster` tab on the CMR: one live QUERY over all `SUMMER_TABS`, normalized to core A:N + the 5 summer columns via a per-school `{core, summer, topkey}` horizontal join, so the flag is always output Col15 and one QUERY (`where Col15 = true`) filters across schools regardless of differing positions. 423 rows across 6 schools as of v2.9.6. Re-run `setup_summer_school_columns.py` after the school list changes.
+
+**Highlight + float-to-top (v2.9.6).** A hidden `_Highlight` tab on the CMR (col A = emails, col B = note) drives two things, both keyed on email so they survive re-sorts: (1) the QUERY's per-school 3rd sub-array is a sort key (`0` if the row's email is in `_Highlight`, else `1`) and the QUERY orders by it first (`order by Col20, Col3, Col5`), floating flagged students to the top; (2) a conditional-format rule paints those rows light red (`#F4CCCC`) across A:S, keyed on a hidden same-sheet helper column U (`=ARRAYFORMULA(... COUNTIF('_Highlight'!$A$2:$A, $B2:$B)>0)`) because CF custom formulas cannot reference another sheet. The rebuild grows the grid to 2000 rows (the CF range is clamped to the grid) and is idempotent (deletes existing CF rules before re-adding). Support manages the highlight set by editing `_Highlight` col A alone.
 
 Per-student values are PII, loaded by gitignored `_scratch_*` scripts (deleted after the run): `_scratch_summer_sot.py` (the 6 source-of-truth lists) + `_scratch_summer_reconcile.py <SCHOOL>` (matches names -> email against the MR, populates `_SummerList`; AFES is rule-based = all enrolled). Matching is confident-only (clean fuzzy-subset + 3+token + lenient short-token tiers, uniqueness-gated); ambiguous/unmatched names are reported for manual review, never guessed, and no new roster rows are created. `_scratch_summer_verify.py <SCHOOL>` asserts the MR's computed TRUE set == `_SummerList` emails (extra=0, missing=0, formula_errors=0).
 

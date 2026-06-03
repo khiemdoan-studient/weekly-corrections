@@ -1,5 +1,25 @@
 # Changelog
 
+## [v2.9.6] - 2026-06-03
+
+Highlight specific summer-school students light red on the combined roster and float them to the top, driven by a support-editable `_Highlight` tab. Plus this session's roster adds.
+
+### Added (highlight + float-to-top mechanism)
+- **`_Highlight` helper tab (CMR, hidden).** Col A = student emails to flag; col B = free-text note. Support edits this one list to control both behaviors below. PII-free in code: the emails live in the sheet, written operationally, never committed.
+- **Float-to-top.** `build_summer_roster_tab()`'s QUERY gained a per-row sort key (a 3rd sub-array per school: `0` when the row's email is in `_Highlight`, else `1`). It orders by that key first, then campus + last name, so `_Highlight` members rise to the top of the `Summer School Roster` while everyone else keeps the campus/last-name order. Keyed on email, so it survives any re-sort.
+- **Light-red paint.** A conditional-format rule fills `_Highlight` rows `#F4CCCC` across A:S. CF custom formulas cannot reference another sheet, so a hidden same-sheet helper column (U) mirrors the lookup (`COUNTIF('_Highlight'!A:A, $B2)>0`) and the rule keys on `=$U2=TRUE`. Idempotent: existing CF rules are deleted before the rule is re-added on each rebuild.
+- **Grid grown to 2000 rows** on rebuild. The CF range is clamped to the grid row count, so a small grid would cap where the highlight paints. Grow-only (never shrinks, no data loss).
+
+### Operational (live `_SummerList` adds this session, not code)
+- Flagged Keyla Lopez Perez (JRHS; previously the ambiguous "Lopez Kayla"). Added 3 JRES (Muhammad Khan, Johan Moreno Romero, Damian Torreblanca-Angel) and 4 JHMS (Adam Fripp with teacher Neetha, Neal Young, Jaylen Young, Ethen West). Combined `Summer School Roster` now 423: JHMS 57, JHES 25, JRHS 140, JRES 24, AFMS 24, AFES 153.
+- Reported, not flagged: Brooke Y'nique Aiken (JRHS) is in the roster but has neither an email nor a student ID, so she cannot be email-keyed until an identifier is assigned. Allen Ortiz Alva was not found in any of the 6 rosters.
+
+### Verified
+- `python -m py_compile` passes. Live: the 8 flagged students occupy rows 2-9 of `Summer School Roster` (hidden helper col TRUE), total 423; CF rule present (`=$U2=TRUE`, `#F4CCCC`, A:S, rows 1-2000); grid rowCount 2000.
+
+### Files changed
+- `setup_summer_school_columns.py`, `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
 ## [v2.9.5] - 2026-05-25
 
 Make the Summer School pipeline durable + sort-proof across all 6 schools, and fix JRES flags that had landed on the wrong students.

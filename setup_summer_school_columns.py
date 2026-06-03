@@ -75,6 +75,18 @@ CORE_HEADERS = [
     "Notes",
 ]
 
+# v2.9.6: per-CMR helper tab driving the combined-roster highlight + float-to-top.
+# Support edits HIGHLIGHT_TAB col A (emails) to control which summer students get
+# painted light red AND floated to the TOP of the Summer School Roster. PII-free in
+# code: the emails live in the sheet (written operationally), never committed.
+HIGHLIGHT_TAB = "_Highlight"
+HIGHLIGHT_HEADERS = ["email", "note"]
+HIGHLIGHT_COLOR = {"red": 0.9569, "green": 0.8, "blue": 0.8}  # #F4CCCC, light red
+# Hidden helper column on the Summer School Roster tab: per-row "is this email in
+# _Highlight?" flag the conditional-format rule keys on (CF custom formulas cannot
+# reference another sheet, so the lookup is mirrored same-sheet here).
+HIGHLIGHT_HELPER_COL = 20  # 0-based -> col U, safely right of the A:S output
+
 
 def col_letter(i):
     """0-based index -> A1 column letter (handles A..ZZ)."""
@@ -423,6 +435,68 @@ def build_sheets_service():
     return build("sheets", "v4", credentials=creds)
 
 
+def provision_highlight_tab(sheets):
+    """Ensure the CMR has the hidden _Highlight helper tab. Col A = student emails
+    to paint light red AND float to the top of the Summer School Roster; col B =
+    free-text note for support. Idempotent: creates + (re)writes headers, NEVER
+    clears existing rows (this is support-managed data)."""
+    meta = retry_api(
+        lambda: sheets.spreadsheets()
+        .get(
+            spreadsheetId=MAP_SPREADSHEET_ID, fields="sheets.properties(title,sheetId)"
+        )
+        .execute(),
+        label="get CMR props (_Highlight)",
+    )
+    existing = {
+        s["properties"]["title"]: s["properties"]["sheetId"] for s in meta["sheets"]
+    }
+    if HIGHLIGHT_TAB in existing:
+        gid = existing[HIGHLIGHT_TAB]
+    else:
+        resp = retry_api(
+            lambda: sheets.spreadsheets()
+            .batchUpdate(
+                spreadsheetId=MAP_SPREADSHEET_ID,
+                body={
+                    "requests": [
+                        {
+                            "addSheet": {
+                                "properties": {
+                                    "title": HIGHLIGHT_TAB,
+                                    "hidden": True,
+                                    "gridProperties": {
+                                        "rowCount": 200,
+                                        "columnCount": 2,
+                                    },
+                                }
+                            }
+                        }
+                    ]
+                },
+            )
+            .execute(),
+            label="add _Highlight tab",
+        )
+        gid = resp["replies"][0]["addSheet"]["properties"]["sheetId"]
+    retry_api(
+        lambda: sheets.spreadsheets()
+        .values()
+        .update(
+            spreadsheetId=MAP_SPREADSHEET_ID,
+            range=f"'{HIGHLIGHT_TAB}'!A1:B1",
+            valueInputOption="RAW",
+            body={"values": [HIGHLIGHT_HEADERS]},
+        )
+        .execute(),
+        label="write _Highlight headers",
+    )
+    print(
+        f"  [OK] '{HIGHLIGHT_TAB}' helper ready (hidden; col A = highlight/top emails)"
+    )
+    return gid
+
+
 def build_summer_roster_tab(sheets):
     """(Re)build the combined ROSTER_TAB on the CMR: every Summer School = TRUE
     row from all SUMMER_TABS, normalized to core A:N + the 5 summer columns.
@@ -433,6 +507,9 @@ def build_summer_roster_tab(sheets):
     output position via a per-school horizontal join {core, summer}. The summer
     flag is then always output column 15, which one QUERY filters on.
     """
+    hl_gid = provision_highlight_tab(sheets)
+    ncol = len(CORE_HEADERS) + len(SUMMER_HEADERS)  # 19 output cols (A:S)
+    sort_col = ncol + 1  # Col20 = per-row float-to-top key (0 = in _Highlight)
     blocks = []
     for tab in SUMMER_TABS:
         pos = read_summer_positions(sheets, MAP_SPREADSHEET_ID, tab)
@@ -442,28 +519,68 @@ def build_summer_roster_tab(sheets):
         flag = min(pos.values())
         s0 = col_letter(flag)
         s1 = col_letter(flag + len(SUMMER_HEADERS) - 1)
-        blocks.append(f"{{'{tab}'!A2:N, '{tab}'!{s0}2:{s1}}}")
+        # 3rd sub-array = float-to-top key: 0 when this row's email (col B) is in
+        # _Highlight, else 1. Keyed on email so it survives any re-sort.
+        topkey = (
+            f'ARRAYFORMULA(IF(\'{tab}\'!B2:B="","",'
+            f"IF(COUNTIF('{HIGHLIGHT_TAB}'!$A$2:$A,'{tab}'!B2:B)>0,0,1)))"
+        )
+        blocks.append(f"{{'{tab}'!A2:N, '{tab}'!{s0}2:{s1}, {topkey}}}")
+    sel = ", ".join(
+        f"Col{i}" for i in range(1, ncol + 1)
+    )  # Col1..Col19 (drop sort key)
     query = (
         "=QUERY({"
         + "; ".join(blocks)
-        + '}, "where Col15 = true order by Col3, Col5", 0)'
+        + '}, "select '
+        + sel
+        + " where Col15 = true order by Col"
+        + str(sort_col)
+        + ', Col3, Col5", 0)'
     )
 
     meta = (
         sheets.spreadsheets()
         .get(
-            spreadsheetId=MAP_SPREADSHEET_ID, fields="sheets.properties(title,sheetId)"
+            spreadsheetId=MAP_SPREADSHEET_ID,
+            fields="sheets.properties(title,sheetId,gridProperties.rowCount)",
         )
         .execute()
     )
     existing = {
         s["properties"]["title"]: s["properties"]["sheetId"] for s in meta["sheets"]
     }
+    rowcounts = {
+        s["properties"]["title"]: s["properties"]
+        .get("gridProperties", {})
+        .get("rowCount", 0)
+        for s in meta["sheets"]
+    }
     if ROSTER_TAB in existing:
         gid = existing[ROSTER_TAB]
         sheets.spreadsheets().values().clear(
             spreadsheetId=MAP_SPREADSHEET_ID, range=f"'{ROSTER_TAB}'!A:AZ"
         ).execute()
+        # Grow the grid so the QUERY spill + CF have headroom: the CF range is
+        # clamped to the grid row count, so a small grid would cap where the
+        # highlight paints. Only ever grows (never shrinks -> no data loss).
+        if rowcounts.get(ROSTER_TAB, 0) < 2000:
+            sheets.spreadsheets().batchUpdate(
+                spreadsheetId=MAP_SPREADSHEET_ID,
+                body={
+                    "requests": [
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": gid,
+                                    "gridProperties": {"rowCount": 2000},
+                                },
+                                "fields": "gridProperties.rowCount",
+                            }
+                        }
+                    ]
+                },
+            ).execute()
     else:
         resp = (
             sheets.spreadsheets()
@@ -492,6 +609,13 @@ def build_summer_roster_tab(sheets):
         gid = resp["replies"][0]["addSheet"]["properties"]["sheetId"]
 
     header = CORE_HEADERS + SUMMER_HEADERS
+    hcol = col_letter(HIGHLIGHT_HELPER_COL)
+    # Same-sheet helper: per output row, TRUE when its email (col B) is in _Highlight.
+    # The conditional-format rule keys on this (CF formulas can't cross sheets).
+    helper = (
+        '=ARRAYFORMULA(IF($B2:$B="","",'
+        f"COUNTIF('{HIGHLIGHT_TAB}'!$A$2:$A,$B2:$B)>0))"
+    )
     sheets.spreadsheets().values().batchUpdate(
         spreadsheetId=MAP_SPREADSHEET_ID,
         body={
@@ -499,25 +623,82 @@ def build_summer_roster_tab(sheets):
             "data": [
                 {"range": f"'{ROSTER_TAB}'!A1", "values": [header]},
                 {"range": f"'{ROSTER_TAB}'!A2", "values": [[query]]},
+                {"range": f"'{ROSTER_TAB}'!{hcol}1", "values": [["_highlight_flag"]]},
+                {"range": f"'{ROSTER_TAB}'!{hcol}2", "values": [[helper]]},
             ],
         },
     ).execute()
-    sheets.spreadsheets().batchUpdate(
-        spreadsheetId=MAP_SPREADSHEET_ID,
-        body={
-            "requests": [
-                {
-                    "repeatCell": {
-                        "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1},
-                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
-                        "fields": "userEnteredFormat.textFormat.bold",
-                    }
-                }
-            ]
+    # Idempotent CF: delete any existing rules on the tab, then add ours once.
+    cf_meta = retry_api(
+        lambda: sheets.spreadsheets()
+        .get(
+            spreadsheetId=MAP_SPREADSHEET_ID,
+            ranges=[ROSTER_TAB],
+            fields="sheets(properties.sheetId,conditionalFormats)",
+        )
+        .execute(),
+        label="read roster CF rules",
+    )
+    n_cf = 0
+    for s in cf_meta.get("sheets", []):
+        if s["properties"]["sheetId"] == gid:
+            n_cf = len(s.get("conditionalFormats", []))
+    requests = [
+        {
+            "repeatCell": {
+                "range": {"sheetId": gid, "startRowIndex": 0, "endRowIndex": 1},
+                "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                "fields": "userEnteredFormat.textFormat.bold",
+            }
         },
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": gid,
+                    "dimension": "COLUMNS",
+                    "startIndex": HIGHLIGHT_HELPER_COL,
+                    "endIndex": HIGHLIGHT_HELPER_COL + 1,
+                },
+                "properties": {"hiddenByUser": True},
+                "fields": "hiddenByUser",
+            }
+        },
+    ]
+    requests += [
+        {"deleteConditionalFormatRule": {"sheetId": gid, "index": 0}}
+        for _ in range(n_cf)
+    ]
+    requests.append(
+        {
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [
+                        {
+                            "sheetId": gid,
+                            "startRowIndex": 1,
+                            "endRowIndex": 2000,
+                            "startColumnIndex": 0,
+                            "endColumnIndex": ncol,
+                        }
+                    ],
+                    "booleanRule": {
+                        "condition": {
+                            "type": "CUSTOM_FORMULA",
+                            "values": [{"userEnteredValue": f"=${hcol}2=TRUE"}],
+                        },
+                        "format": {"backgroundColor": HIGHLIGHT_COLOR},
+                    },
+                },
+                "index": 0,
+            }
+        }
+    )
+    sheets.spreadsheets().batchUpdate(
+        spreadsheetId=MAP_SPREADSHEET_ID, body={"requests": requests}
     ).execute()
     print(
-        f"  [OK] '{ROSTER_TAB}' rebuilt: {len(blocks)} school(s), core A:N + 5 summer cols"
+        f"  [OK] '{ROSTER_TAB}' rebuilt: {len(blocks)} school(s); _Highlight members "
+        f"floated to top + painted light red"
     )
 
 
