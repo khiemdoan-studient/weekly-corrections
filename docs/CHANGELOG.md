@@ -1,5 +1,27 @@
 # Changelog
 
+## [v2.9.5] - 2026-05-25
+
+Make the Summer School pipeline durable + sort-proof across all 6 schools, and fix JRES flags that had landed on the wrong students.
+
+### Fixed (incident)
+- **JRES summer flags were on the WRONG students.** Root cause: the JRES "Student Roster" is a sticky-sorted Google Table, and the v2.9.x approach wrote STATIC Summer School=TRUE to matched ROW NUMBERS. Verification passed at write time, but the roster later re-sorted and the static flags detached: the original match rows then held different students (D'Marius Aiken et al. instead of the intended Nolji Dupont / Farrah Aiken set). The other schools are plain typed sheets and did not drift.
+
+### Changed (durable uniform architecture, all 6 schools)
+- The summer flag is now keyed to student EMAIL via a hidden per-ISR `_SummerList` tab (email, grade, subjects, teacher_email, teacher). The MR "MAP Roster" summer columns are EMAIL-keyed ARRAYFORMULA lookups into `_SummerList` (flag = `ISNUMBER(MATCH(email,...))`; grade/subjects/teacher = `VLOOKUP`), NOT mirrors of the sortable Student Roster. The SR summer columns are cleared (decoupled). Each MR row computes its own status from its own email, so re-sorting any roster can never misalign the flags again.
+- Email (not student_id) is the key because it is universal: it also covers "email-only" students whose Student ID is still blank (a student_id key dropped 5 such AFMS students).
+- `provision_mr` clears the summer-column region before writing the spilling ARRAYFORMULA (stale static values, e.g. a block of "False" from the old mirror, otherwise blocked the spill with `#REF!`).
+
+### Reconciled to source-of-truth (confident matches; unmatched reported, never guessed)
+Flagged EXACTLY the source-of-truth lists: JHMS 53, JHES 25, JRHS 139, JRES 21, AFMS 24, AFES 153 = 415 total. Every school adversarially verified (MR computed TRUE set == `_SummerList`, extra=0, missing=0, formula_errors=0). Combined "Summer School Roster" = 415 across 6 schools, every row TRUE; JRES now shows the intended students.
+- Unmatched / ambiguous (genuinely not in their rosters; reported for manual review): JHMS = Anherlyz Camacho Arias, Caleb Grant, Jade Castillo Moreno, Martinez (no first name); JRHS = Aiken Brooke Y'nique, Brown Nesiyah Demonte, Candelario Jeronimo Yacquelin, Shuster Jason Paul, Jeronimo Joslin, Lopez Kayla (ambiguous).
+
+### Execution
+Reconcile + adversarial verify ran as a parallel Workflow (one agent per school) per request; the post-fix pass re-ran serially for full visibility.
+
+### Files changed
+- `setup_summer_school_columns.py` (refactor), `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`. Gitignored, deleted after run: `_scratch_summer_sot.py`, `_scratch_summer_reconcile.py`, `_scratch_summer_verify.py`.
+
 ## [v2.9.3] - 2026-05-25
 
 Add AFES (Allendale Fairfax Elementary School) to summer school, rule-based.

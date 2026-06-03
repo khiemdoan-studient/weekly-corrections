@@ -35,6 +35,13 @@ SUMMER_HEADERS = [
 ]
 FLAG_HEADER = SUMMER_HEADERS[0]
 
+# v2.9.5: per-ISR hidden helper tab. The summer flag is keyed to EMAIL here
+# (stable AND universal -- every student has an email, including "email-only"
+# students whose Student ID is still blank). The MR looks students up in it by
+# email, so reordering the (sortable) Student Roster can never misalign the flag.
+SUMMER_LIST_TAB = "_SummerList"
+SUMMER_LIST_HEADERS = ["email", "grade", "subjects", "teacher_email", "teacher"]
+
 # Campuses running summer school (CMR tab name -> ISR id via ISR_CONFIG).
 SUMMER_TABS = [
     "Hardeeville Junior & Senior High School (Dash)",
@@ -225,39 +232,128 @@ def set_plain_number(sheets, ssid, sheet_id, col_idx, row_count):
     )
 
 
+def provision_summer_list(sheets, isr_id):
+    """Ensure the hidden `_SummerList` helper tab exists with headers. This tab
+    (student_id, grade, subjects, teacher_email, teacher) is the durable, sort-proof
+    source for the summer flag: the MR looks students up here by email, so
+    reordering the Student Roster can never misalign the flag. Populated per school
+    by the one-time reconcile loader."""
+    meta = retry_api(
+        lambda: sheets.spreadsheets()
+        .get(spreadsheetId=isr_id, fields="sheets.properties(title,sheetId)")
+        .execute(),
+        label="get props for _SummerList",
+    )
+    existing = {s["properties"]["title"] for s in meta["sheets"]}
+    if SUMMER_LIST_TAB not in existing:
+        retry_api(
+            lambda: sheets.spreadsheets()
+            .batchUpdate(
+                spreadsheetId=isr_id,
+                body={
+                    "requests": [
+                        {
+                            "addSheet": {
+                                "properties": {
+                                    "title": SUMMER_LIST_TAB,
+                                    "hidden": True,
+                                    "gridProperties": {
+                                        "rowCount": 1000,
+                                        "columnCount": 6,
+                                    },
+                                }
+                            }
+                        }
+                    ]
+                },
+            )
+            .execute(),
+            label="add _SummerList tab",
+        )
+    retry_api(
+        lambda: sheets.spreadsheets()
+        .values()
+        .update(
+            spreadsheetId=isr_id,
+            range=f"'{SUMMER_LIST_TAB}'!A1",
+            valueInputOption="RAW",
+            body={"values": [SUMMER_LIST_HEADERS]},
+        )
+        .execute(),
+        label="write _SummerList headers",
+    )
+    print(f"  [OK] {SUMMER_LIST_TAB} ready (student_id-keyed summer source)")
+
+
 def provision_sr(sheets, isr_id):
-    """SR: append the 5 headers + checkbox validation on the flag col. Typed
-    student values are written later by the loader. Returns {header: idx}."""
+    """SR: ensure the 5 summer headers exist, then CLEAR their data rows. v2.9.5:
+    the Student Roster is a sortable tab and is NO LONGER the summer source (static
+    flags here detached when the roster re-sorted). The flag now lives in
+    `_SummerList` + MR lookups. Returns {header: idx}."""
     gid, rows, cols = get_sheet_props(sheets, isr_id, SR_TAB)
     pos = assign_positions(read_header_row(sheets, isr_id, SR_TAB))
     ensure_grid_cols(sheets, isr_id, gid, cols, max(pos.values()) + 1)
     write_headers(sheets, isr_id, SR_TAB, pos)
-    set_checkbox(sheets, isr_id, gid, pos[FLAG_HEADER], max(rows, 1200))
-    set_plain_number(sheets, isr_id, gid, pos[SUMMER_HEADERS[3]], max(rows, 1200))
-    print(
-        f"  [OK] SR cols {col_letter(min(pos.values()))}..{col_letter(max(pos.values()))}"
-        f" (flag={col_letter(pos[FLAG_HEADER])})"
+    c0 = col_letter(min(pos.values()))
+    c1 = col_letter(max(pos.values()))
+    retry_api(
+        lambda: sheets.spreadsheets()
+        .values()
+        .clear(spreadsheetId=isr_id, range=f"'{SR_TAB}'!{c0}2:{c1}")
+        .execute(),
+        label="clear stale SR summer data",
     )
+    print(f"  [OK] SR summer cols {c0}..{c1} cleared (decoupled; source=_SummerList)")
     return pos
 
 
-def provision_mr(sheets, isr_id, sr_pos):
-    """MR: append the 5 headers, each row-2 =ARRAYFORMULA mirror of the matching
-    SR column (mirrors the existing MR column style). Returns {header: idx}."""
+def provision_mr(sheets, isr_id):
+    """MR: ensure the 5 summer headers exist; write each as a sort-proof
+    ARRAYFORMULA that looks the student up in `_SummerList` by EMAIL (MR col B),
+    NOT a mirror of the sortable Student Roster. Email-keyed so it also covers
+    students whose Student ID is still blank. Returns {header: idx}.
+
+    _SummerList layout: A=email, B=grade, C=subjects, D=teacher_email, E=teacher.
+    """
     gid, rows, cols = get_sheet_props(sheets, isr_id, MR_TAB)
     pos = assign_positions(read_header_row(sheets, isr_id, MR_TAB))
     ensure_grid_cols(sheets, isr_id, gid, cols, max(pos.values()) + 1)
     write_headers(sheets, isr_id, MR_TAB, pos)
-    data = []
-    for h in SUMMER_HEADERS:
-        sr_col = col_letter(sr_pos[h])
-        mr_col = col_letter(pos[h])
-        data.append(
-            {
-                "range": f"'{MR_TAB}'!{mr_col}2",
-                "values": [[f"=ARRAYFORMULA('{SR_TAB}'!{sr_col}2:{sr_col})"]],
-            }
-        )
+    # v2.9.5: clear the whole summer-column data region first. Stale static values
+    # left in these columns (e.g. a block of "False" from the old mirror) would
+    # block the new ARRAYFORMULA spill with #REF! ("result would overwrite data").
+    mc0 = col_letter(min(pos.values()))
+    mc1 = col_letter(max(pos.values()))
+    retry_api(
+        lambda: sheets.spreadsheets()
+        .values()
+        .clear(spreadsheetId=isr_id, range=f"'{MR_TAB}'!{mc0}2:{mc1}")
+        .execute(),
+        label="clear MR summer region (unblock arrayformula spill)",
+    )
+    lk = f"'{SUMMER_LIST_TAB}'!$A$2:$E"
+    ids = f"'{SUMMER_LIST_TAB}'!$A$2:$A"
+    formula_for = {
+        SUMMER_HEADERS[
+            0
+        ]: f'=ARRAYFORMULA(IF(B2:B="","",IF(ISNUMBER(MATCH(B2:B,{ids},0)),TRUE,FALSE)))',
+        SUMMER_HEADERS[
+            1
+        ]: f'=ARRAYFORMULA(IF(B2:B="","",IFERROR(VLOOKUP(B2:B,{lk},4,FALSE),"")))',
+        SUMMER_HEADERS[
+            2
+        ]: f'=ARRAYFORMULA(IF(B2:B="","",IFERROR(VLOOKUP(B2:B,{lk},5,FALSE),"")))',
+        SUMMER_HEADERS[
+            3
+        ]: f'=ARRAYFORMULA(IF(B2:B="","",IFERROR(VLOOKUP(B2:B,{lk},2,FALSE),"")))',
+        SUMMER_HEADERS[
+            4
+        ]: f'=ARRAYFORMULA(IF(B2:B="","",IFERROR(VLOOKUP(B2:B,{lk},3,FALSE),"")))',
+    }
+    data = [
+        {"range": f"'{MR_TAB}'!{col_letter(pos[h])}2", "values": [[formula_for[h]]]}
+        for h in SUMMER_HEADERS
+    ]
     retry_api(
         lambda: sheets.spreadsheets()
         .values()
@@ -266,14 +362,10 @@ def provision_mr(sheets, isr_id, sr_pos):
             body={"valueInputOption": "USER_ENTERED", "data": data},
         )
         .execute(),
-        label="write MR arrayformulas",
+        label="write MR summer lookups",
     )
-    set_checkbox(sheets, isr_id, gid, pos[FLAG_HEADER], max(rows, 1200))
     set_plain_number(sheets, isr_id, gid, pos[SUMMER_HEADERS[3]], max(rows, 1200))
-    print(
-        f"  [OK] MR cols {col_letter(min(pos.values()))}..{col_letter(max(pos.values()))}"
-        f" = ARRAYFORMULA mirrors"
-    )
+    print("  [OK] MR summer cols = _SummerList lookups keyed on email (sort-proof)")
     return pos
 
 
@@ -432,21 +524,22 @@ def build_summer_roster_tab(sheets):
 def main():
     start = time.time()
     print("=" * 70)
-    print("  SUMMER SCHOOL COLUMN PROVISIONING (v2.9.1)")
+    print("  SUMMER SCHOOL PROVISIONING (v2.9.5: _SummerList + MR student_id lookups)")
     print("=" * 70)
     sheets = build_sheets_service()
     for tab in SUMMER_TABS:
         isr_id = ISR_CONFIG[tab]["isr_id"]
         print(f"\n--- {tab}  (ISR {isr_id[:10]}...) ---")
-        sr_pos = provision_sr(sheets, isr_id)
-        mr_pos = provision_mr(sheets, isr_id, sr_pos)
+        provision_summer_list(sheets, isr_id)
+        provision_sr(sheets, isr_id)
+        mr_pos = provision_mr(sheets, isr_id)
         provision_cmr(sheets, tab, isr_id, mr_pos)
     print("\n--- Combined Summer School Roster tab ---")
     build_summer_roster_tab(sheets)
     print(f"\n  Completed in {time.time() - start:.1f}s")
-    print("  If the CMR shows #REF! on the new cols, open the CMR once and click")
-    print("  'Allow access' per ISR (IMPORTRANGE auth; already granted for these")
-    print("  ISR->CMR pairs via the existing A1 + Unenroll imports, so usually none).")
+    print("  Next: run the reconcile loader per school to populate each _SummerList.")
+    print("  (If the CMR shows #REF! on the summer cols, open the CMR once and click")
+    print("   'Allow access' per ISR -- usually already granted via existing imports.)")
 
 
 if __name__ == "__main__":
