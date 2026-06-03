@@ -1,5 +1,19 @@
 # Changelog
 
+## [v2.9.7] - 2026-06-03
+
+Mark every student added to the Summer School list since this morning red (so tonight's tech-team run catches them), found via Drive revision-history diff. Surfaced a stale-cache issue.
+
+### Operational (live _Highlight data, not code)
+- Diffed the current combined Summer School Roster (423) vs the stable 06-03 morning baseline (the 00:11 / 09:27 / 10:47 CMR revisions, all 415, exported via the Drive revisions API as CSV). 28 students are on the list now but were not this morning; appended the 21 not-already-red to `_Highlight` (now 29 red, incl. derrhiana.bostick). They float to the top + paint light red.
+
+### Found + escalated to the team
+- This morning's CMR roster still showed the OLD WRONG JRES students from the v2.9.5 incident (dmarius.aiken, makayla.badarou + 18 more = 20). They are now gone, and the CORRECT JRES students (nolji.dupont, farrah.aiken, sara.velasquezalvarado, derrhiana.bostick, ...) only became visible today after the v2.9.6 rebuild refreshed a stale QUERY/IMPORTRANGE cache. So the tech team likely configured 20 wrong students this morning (cleanup flagged).
+- Lesson: the combined-roster QUERY/IMPORTRANGE can lag the source ISRs for a long time. Re-run `build_summer_roster_tab()` to force a fresh pull, and verify the LIVE roster, not a cached view.
+
+### Method (reusable)
+- The Drive revisions API exposes per-revision `exportLinks` even for native Sheets: export a revision as CSV (swap `exportFormat=ods` to `csv`, append `&gid=`) to read any historical tab state and diff vs now.
+
 ## [v2.9.6] - 2026-06-03
 
 Highlight specific summer-school students light red on the combined roster and float them to the top, driven by a support-editable `_Highlight` tab. Plus this session's roster adds.
