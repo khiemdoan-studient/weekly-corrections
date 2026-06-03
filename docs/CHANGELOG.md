@@ -1,5 +1,22 @@
 # Changelog
 
+## [v2.9.8] - 2026-06-03
+
+Add `summer_roster_diff.py` (diff the roster vs a past revision or the source of truth; detect stale cache; mark new students red) and root-cause the 2026-06-03 JRES stale-roster incident.
+
+### Added
+- **`summer_roster_diff.py`** (committed, PII-free). Modes: `--since-rev ID` / `--since-date YYYY-MM-DD` diff the live "Summer School Roster" vs that Drive revision (added/removed by campus + name + grade; optional `--csv`); `--vs-source` compares the visible roster vs the source of truth (each ISR's MAP Roster computed-TRUE summer emails) and exits 1 on drift (the staleness detector); `--mark-red` appends added-not-already-red emails to `_Highlight`. Reuses `setup_summer_school_columns.py` helpers + the Drive-revision CSV-export approach.
+
+### Root cause (2026-06-03 JRES stale-roster incident)
+- The combined roster's QUERY pulls from per-campus CMR tabs that `=IMPORTRANGE(ISR,"MAP Roster!AE2:AE")`. This morning the JRES per-campus IMPORTRANGE was STALE: it still showed the 20 v2.9.5-incident students while the JRES ISR MAP Roster was already correct. IMPORTRANGE refresh is Google-controlled and can lag; the v2.9.6 rebuild happened to refresh it. Verified all 6 schools consistent now (per-campus CMR TRUE == ISR MR TRUE).
+- Safeguard: run `python summer_roster_diff.py --vs-source` before the tech team's morning configuration (or on a schedule). It flags any school whose visible roster lags its source, so a `setup_summer_school_columns.py` rebuild can refresh the IMPORTRANGE before students are configured.
+
+### Operational
+- Delivered the 20 wrong JRES students (on this morning's stale list, now removed) so the tech team can un-configure them. Verified the JRES `_SummerList` has all 19 names from the source-of-truth sheet; 5 extras left in place per the user.
+
+### Files changed
+- `summer_roster_diff.py` (new), `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
 ## [v2.9.7] - 2026-06-03
 
 Mark every student added to the Summer School list since this morning red (so tonight's tech-team run catches them), found via Drive revision-history diff. Surfaced a stale-cache issue.
