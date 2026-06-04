@@ -1,5 +1,16 @@
 # Changelog
 
+## [v2.9.9] - 2026-06-03
+
+Add 66 JHMS (Hardeeville Jr/Sr) summer-school students from a manager's "not on the original roster" list, and mark them red.
+
+### Operational (live _SummerList + _Highlight data, not code)
+- 68 students provided across 4 teachers (Shantireya Rivers g6, Nicole Parker g7/g8, Avlen Edwards g8, Angelo Messina g8). Matched 66/68 against the live JHMS MAP Roster (grades aligned, 0 already flagged, 0 ambiguous) and appended them to the JHMS `_SummerList` (email-keyed; "Language and Fast Math"; grade 6/7/8; teacher name + the jcsd.net teacher email where the teacher is on the roster, i.e. Rivers + Edwards, blank for Parker + Messina) and to `_Highlight` (light red + float-to-top, per the user, for tonight's config run). 2 students did not match the JHMS roster (reported in chat for spelling/roster confirmation; not added, no email key).
+- Result: JHMS `_SummerList` 57 -> 123; combined "Summer School Roster" 423 -> 489 (JHMS 57 -> 123, the other 5 schools unchanged); `_Highlight` 29 -> 95; all 66 compute Summer School = TRUE and float to the top.
+
+### Files changed
+- `docs/CHANGELOG.md` (this entry). The student adds are live `_SummerList` / `_Highlight` data (PII, not committed); no pipeline code changed.
+
 ## [v2.9.8] - 2026-06-03
 
 Add `summer_roster_diff.py` (diff the roster vs a past revision or the source of truth; detect stale cache; mark new students red) and root-cause the 2026-06-03 JRES stale-roster incident.
