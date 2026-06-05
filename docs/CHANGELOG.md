@@ -1,5 +1,21 @@
 # Changelog
 
+## [v2.9.10] - 2026-06-03
+
+Add a second highlight color (purple) to the combined Summer School Roster, and add 6 AFMS students marked with it.
+
+### Added (purple highlight)
+- `_Highlight` gains a `color` column (col C): "red" (default/blank) or "purple", so a distinct change-set gets a distinct color. The combined roster now carries TWO hidden helper columns (U = "in _Highlight", V = "color is purple") and TWO conditional-format rules: purple (`#D9D2E9`, keyed `=$V2=TRUE`) and red (`#F4CCCC`, keyed `=AND($U2=TRUE,$V2=FALSE)` so the two never double-apply). Both colors still float to the top. `provision_highlight_tab` now also grows an older 2-column `_Highlight` tab to 3 columns.
+
+### Operational (live data, not committed)
+- Added 6 AFMS students (teachers Morgan g6/g8 + Jessica Grant g7/g8; per-student Language/Math subjects; @acs.k12.sc.us teacher emails) to the AFMS `_SummerList` and marked them PURPLE in `_Highlight`. AFMS `_SummerList` 24 -> 30; combined "Summer School Roster" 489 -> 495; `_Highlight` = 95 red + 6 purple = 101.
+
+### Verified
+- `python -m py_compile` passes. Live: the 6 AFMS flag TRUE; combined +6 (AFMS 30, other 5 schools unchanged); helper V=TRUE for the 6 (purple) and V=FALSE for the prior red set; CF = 2 rules (purple #D9D2E9 + red #F4CCCC).
+
+### Files changed
+- `setup_summer_school_columns.py`, `docs/CHANGELOG.md`.
+
 ## [v2.9.9] - 2026-06-03
 
 Add 66 JHMS (Hardeeville Jr/Sr) summer-school students from a manager's "not on the original roster" list, and mark them red.

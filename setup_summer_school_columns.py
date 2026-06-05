@@ -80,12 +80,20 @@ CORE_HEADERS = [
 # painted light red AND floated to the TOP of the Summer School Roster. PII-free in
 # code: the emails live in the sheet (written operationally), never committed.
 HIGHLIGHT_TAB = "_Highlight"
-HIGHLIGHT_HEADERS = ["email", "note"]
+# col C "color" (v2.9.10): per-email highlight color, "red" (default/blank) or
+# "purple", so a distinct change-set gets a distinct color on the roster.
+HIGHLIGHT_HEADERS = ["email", "note", "color"]
 HIGHLIGHT_COLOR = {"red": 0.9569, "green": 0.8, "blue": 0.8}  # #F4CCCC, light red
-# Hidden helper column on the Summer School Roster tab: per-row "is this email in
-# _Highlight?" flag the conditional-format rule keys on (CF custom formulas cannot
-# reference another sheet, so the lookup is mirrored same-sheet here).
-HIGHLIGHT_HELPER_COL = 20  # 0-based -> col U, safely right of the A:S output
+HIGHLIGHT_COLOR_PURPLE = {
+    "red": 0.851,
+    "green": 0.8235,
+    "blue": 0.9137,
+}  # #D9D2E9, light purple
+# Two hidden helper columns on the Summer School Roster tab (CF formulas cannot
+# reference another sheet): col U = "in _Highlight" (red-eligible); col V = "color
+# is purple". The two CF rules key on these.
+HIGHLIGHT_HELPER_COL = 20  # 0-based -> col U (in _Highlight)
+HIGHLIGHT_PURPLE_COL = 21  # 0-based -> col V (is purple)
 
 
 def col_letter(i):
@@ -443,7 +451,8 @@ def provision_highlight_tab(sheets):
     meta = retry_api(
         lambda: sheets.spreadsheets()
         .get(
-            spreadsheetId=MAP_SPREADSHEET_ID, fields="sheets.properties(title,sheetId)"
+            spreadsheetId=MAP_SPREADSHEET_ID,
+            fields="sheets.properties(title,sheetId,gridProperties.columnCount)",
         )
         .execute(),
         label="get CMR props (_Highlight)",
@@ -451,8 +460,36 @@ def provision_highlight_tab(sheets):
     existing = {
         s["properties"]["title"]: s["properties"]["sheetId"] for s in meta["sheets"]
     }
+    cols = {
+        s["properties"]["title"]: s["properties"]
+        .get("gridProperties", {})
+        .get("columnCount", 0)
+        for s in meta["sheets"]
+    }
     if HIGHLIGHT_TAB in existing:
         gid = existing[HIGHLIGHT_TAB]
+        # Grow an older 2-col tab so the v2.9.10 "color" column (C) fits.
+        if cols.get(HIGHLIGHT_TAB, 0) < len(HIGHLIGHT_HEADERS):
+            retry_api(
+                lambda: sheets.spreadsheets()
+                .batchUpdate(
+                    spreadsheetId=MAP_SPREADSHEET_ID,
+                    body={
+                        "requests": [
+                            {
+                                "appendDimension": {
+                                    "sheetId": gid,
+                                    "dimension": "COLUMNS",
+                                    "length": len(HIGHLIGHT_HEADERS)
+                                    - cols.get(HIGHLIGHT_TAB, 0),
+                                }
+                            }
+                        ]
+                    },
+                )
+                .execute(),
+                label="grow _Highlight to 3 cols",
+            )
     else:
         resp = retry_api(
             lambda: sheets.spreadsheets()
@@ -467,7 +504,7 @@ def provision_highlight_tab(sheets):
                                     "hidden": True,
                                     "gridProperties": {
                                         "rowCount": 200,
-                                        "columnCount": 2,
+                                        "columnCount": 3,
                                     },
                                 }
                             }
@@ -484,7 +521,7 @@ def provision_highlight_tab(sheets):
         .values()
         .update(
             spreadsheetId=MAP_SPREADSHEET_ID,
-            range=f"'{HIGHLIGHT_TAB}'!A1:B1",
+            range=f"'{HIGHLIGHT_TAB}'!A1:C1",
             valueInputOption="RAW",
             body={"values": [HIGHLIGHT_HEADERS]},
         )
@@ -610,11 +647,17 @@ def build_summer_roster_tab(sheets):
 
     header = CORE_HEADERS + SUMMER_HEADERS
     hcol = col_letter(HIGHLIGHT_HELPER_COL)
-    # Same-sheet helper: per output row, TRUE when its email (col B) is in _Highlight.
-    # The conditional-format rule keys on this (CF formulas can't cross sheets).
+    pcol = col_letter(HIGHLIGHT_PURPLE_COL)
+    # Same-sheet helpers (CF can't cross sheets): col U = email in _Highlight;
+    # col V = that email's _Highlight color is "purple". CF rules key on these.
     helper = (
         '=ARRAYFORMULA(IF($B2:$B="","",'
         f"COUNTIF('{HIGHLIGHT_TAB}'!$A$2:$A,$B2:$B)>0))"
+    )
+    purple = (
+        '=ARRAYFORMULA(IF($B2:$B="","",'
+        f"COUNTIFS('{HIGHLIGHT_TAB}'!$A$2:$A,$B2:$B,"
+        f"'{HIGHLIGHT_TAB}'!$C$2:$C,\"purple\")>0))"
     )
     sheets.spreadsheets().values().batchUpdate(
         spreadsheetId=MAP_SPREADSHEET_ID,
@@ -625,6 +668,8 @@ def build_summer_roster_tab(sheets):
                 {"range": f"'{ROSTER_TAB}'!A2", "values": [[query]]},
                 {"range": f"'{ROSTER_TAB}'!{hcol}1", "values": [["_highlight_flag"]]},
                 {"range": f"'{ROSTER_TAB}'!{hcol}2", "values": [[helper]]},
+                {"range": f"'{ROSTER_TAB}'!{pcol}1", "values": [["_purple_flag"]]},
+                {"range": f"'{ROSTER_TAB}'!{pcol}2", "values": [[purple]]},
             ],
         },
     ).execute()
@@ -657,7 +702,7 @@ def build_summer_roster_tab(sheets):
                     "sheetId": gid,
                     "dimension": "COLUMNS",
                     "startIndex": HIGHLIGHT_HELPER_COL,
-                    "endIndex": HIGHLIGHT_HELPER_COL + 1,
+                    "endIndex": HIGHLIGHT_PURPLE_COL + 1,
                 },
                 "properties": {"hiddenByUser": True},
                 "fields": "hiddenByUser",
@@ -668,28 +713,50 @@ def build_summer_roster_tab(sheets):
         {"deleteConditionalFormatRule": {"sheetId": gid, "index": 0}}
         for _ in range(n_cf)
     ]
+    cf_range = {
+        "sheetId": gid,
+        "startRowIndex": 1,
+        "endRowIndex": 2000,
+        "startColumnIndex": 0,
+        "endColumnIndex": ncol,
+    }
+    # Purple (index 0, more specific) then red (index 1). Red excludes purple rows
+    # via AND(...=FALSE) so the two never double-apply.
     requests.append(
         {
             "addConditionalFormatRule": {
                 "rule": {
-                    "ranges": [
-                        {
-                            "sheetId": gid,
-                            "startRowIndex": 1,
-                            "endRowIndex": 2000,
-                            "startColumnIndex": 0,
-                            "endColumnIndex": ncol,
-                        }
-                    ],
+                    "ranges": [dict(cf_range)],
                     "booleanRule": {
                         "condition": {
                             "type": "CUSTOM_FORMULA",
-                            "values": [{"userEnteredValue": f"=${hcol}2=TRUE"}],
+                            "values": [{"userEnteredValue": f"=${pcol}2=TRUE"}],
+                        },
+                        "format": {"backgroundColor": HIGHLIGHT_COLOR_PURPLE},
+                    },
+                },
+                "index": 0,
+            }
+        }
+    )
+    requests.append(
+        {
+            "addConditionalFormatRule": {
+                "rule": {
+                    "ranges": [dict(cf_range)],
+                    "booleanRule": {
+                        "condition": {
+                            "type": "CUSTOM_FORMULA",
+                            "values": [
+                                {
+                                    "userEnteredValue": f"=AND(${hcol}2=TRUE,${pcol}2=FALSE)"
+                                }
+                            ],
                         },
                         "format": {"backgroundColor": HIGHLIGHT_COLOR},
                     },
                 },
-                "index": 0,
+                "index": 1,
             }
         }
     )
@@ -698,7 +765,7 @@ def build_summer_roster_tab(sheets):
     ).execute()
     print(
         f"  [OK] '{ROSTER_TAB}' rebuilt: {len(blocks)} school(s); _Highlight members "
-        f"floated to top + painted light red"
+        f"floated to top + painted red/purple (per _Highlight col C)"
     )
 
 
