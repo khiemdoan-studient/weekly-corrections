@@ -306,32 +306,60 @@ def provision_summer_list(sheets, isr_id):
 
 
 def provision_sr(sheets, isr_id):
-    """SR: ensure the 5 summer headers exist, then CLEAR their data rows. v2.9.5:
-    the Student Roster is a sortable tab and is NO LONGER the summer source (static
-    flags here detached when the roster re-sorted). The flag now lives in
-    `_SummerList` + MR lookups. Returns {header: idx}."""
+    """SR: ensure the 5 summer headers exist + make "Summer School" an editable
+    checkbox input. v2.9.11: the SR checkbox is a LIVE source again, OR'd with
+    `_SummerList` in the MR. Does NOT clear data (preserves manager-set checkboxes
+    + details). The summer cols sit inside the SR Table (verified sort-safe), so a
+    checked box travels with its row on sort. Returns {header: idx}."""
     gid, rows, cols = get_sheet_props(sheets, isr_id, SR_TAB)
     pos = assign_positions(read_header_row(sheets, isr_id, SR_TAB))
     ensure_grid_cols(sheets, isr_id, gid, cols, max(pos.values()) + 1)
     write_headers(sheets, isr_id, SR_TAB, pos)
-    c0 = col_letter(min(pos.values()))
-    c1 = col_letter(max(pos.values()))
-    retry_api(
-        lambda: sheets.spreadsheets()
-        .values()
-        .clear(spreadsheetId=isr_id, range=f"'{SR_TAB}'!{c0}2:{c1}")
-        .execute(),
-        label="clear stale SR summer data",
-    )
-    print(f"  [OK] SR summer cols {c0}..{c1} cleared (decoupled; source=_SummerList)")
+    flag_idx = pos[FLAG_HEADER]
+    try:
+        retry_api(
+            lambda: sheets.spreadsheets()
+            .batchUpdate(
+                spreadsheetId=isr_id,
+                body={
+                    "requests": [
+                        {
+                            "setDataValidation": {
+                                "range": {
+                                    "sheetId": gid,
+                                    "startRowIndex": 1,
+                                    "endRowIndex": max(rows, 1200),
+                                    "startColumnIndex": flag_idx,
+                                    "endColumnIndex": flag_idx + 1,
+                                },
+                                "rule": {
+                                    "condition": {"type": "BOOLEAN"},
+                                    "showCustomUi": True,
+                                },
+                            }
+                        }
+                    ]
+                },
+            )
+            .execute(),
+            label="SR summer checkbox validation",
+        )
+        print(
+            f"  [OK] SR '{FLAG_HEADER}' editable checkbox (col {col_letter(flag_idx)})"
+        )
+    except Exception as e:
+        print(
+            f"  [note] SR checkbox validation skipped ({str(e)[:50]}); col editable, MR reads its value"
+        )
     return pos
 
 
 def provision_mr(sheets, isr_id):
-    """MR: ensure the 5 summer headers exist; write each as a sort-proof
-    ARRAYFORMULA that looks the student up in `_SummerList` by EMAIL (MR col B),
-    NOT a mirror of the sortable Student Roster. Email-keyed so it also covers
-    students whose Student ID is still blank. Returns {header: idx}.
+    """MR: ensure the 5 summer headers exist; write each as an ARRAYFORMULA that
+    COALESCES the row's own Student Roster summer cell (the restored, sort-safe
+    in-Table checkbox/detail) with the email-keyed `_SummerList` lookup (MR col B).
+    flag = (SR checkbox) OR (email in _SummerList); each detail = SR cell else
+    _SummerList VLOOKUP. Both sources are sort-safe. Returns {header: idx}.
 
     _SummerList layout: A=email, B=grade, C=subjects, D=teacher_email, E=teacher.
     """
@@ -353,22 +381,28 @@ def provision_mr(sheets, isr_id):
     )
     lk = f"'{SUMMER_LIST_TAB}'!$A$2:$E"
     ids = f"'{SUMMER_LIST_TAB}'!$A$2:$A"
+    # v2.9.11: each MR summer column COALESCES the row's own SR cell (the restored,
+    # sort-safe in-Table checkbox/detail) with the email-keyed _SummerList lookup.
+    sr_pos = assign_positions(read_header_row(sheets, isr_id, SR_TAB))
+    sr = {h: col_letter(sr_pos[h]) for h in SUMMER_HEADERS}
+
+    def _coalesce(h, vcol):
+        s = f"'{SR_TAB}'!{sr[h]}2:{sr[h]}"
+        return (
+            f'=ARRAYFORMULA(IF(B2:B="","",'
+            f'IF({s}<>"",{s},IFERROR(VLOOKUP(B2:B,{lk},{vcol},FALSE),""))))'
+        )
+
+    fcol = f"'{SR_TAB}'!{sr[SUMMER_HEADERS[0]]}2:{sr[SUMMER_HEADERS[0]]}"
     formula_for = {
-        SUMMER_HEADERS[
-            0
-        ]: f'=ARRAYFORMULA(IF(B2:B="","",IF(ISNUMBER(MATCH(B2:B,{ids},0)),TRUE,FALSE)))',
-        SUMMER_HEADERS[
-            1
-        ]: f'=ARRAYFORMULA(IF(B2:B="","",IFERROR(VLOOKUP(B2:B,{lk},4,FALSE),"")))',
-        SUMMER_HEADERS[
-            2
-        ]: f'=ARRAYFORMULA(IF(B2:B="","",IFERROR(VLOOKUP(B2:B,{lk},5,FALSE),"")))',
-        SUMMER_HEADERS[
-            3
-        ]: f'=ARRAYFORMULA(IF(B2:B="","",IFERROR(VLOOKUP(B2:B,{lk},2,FALSE),"")))',
-        SUMMER_HEADERS[
-            4
-        ]: f'=ARRAYFORMULA(IF(B2:B="","",IFERROR(VLOOKUP(B2:B,{lk},3,FALSE),"")))',
+        SUMMER_HEADERS[0]: (
+            f'=ARRAYFORMULA(IF(B2:B="","",'
+            f"(({fcol}=TRUE)+ISNUMBER(MATCH(B2:B,{ids},0)))>0))"
+        ),
+        SUMMER_HEADERS[1]: _coalesce(SUMMER_HEADERS[1], 4),
+        SUMMER_HEADERS[2]: _coalesce(SUMMER_HEADERS[2], 5),
+        SUMMER_HEADERS[3]: _coalesce(SUMMER_HEADERS[3], 2),
+        SUMMER_HEADERS[4]: _coalesce(SUMMER_HEADERS[4], 3),
     }
     data = [
         {"range": f"'{MR_TAB}'!{col_letter(pos[h])}2", "values": [[formula_for[h]]]}
@@ -385,7 +419,7 @@ def provision_mr(sheets, isr_id):
         label="write MR summer lookups",
     )
     set_plain_number(sheets, isr_id, gid, pos[SUMMER_HEADERS[3]], max(rows, 1200))
-    print("  [OK] MR summer cols = _SummerList lookups keyed on email (sort-proof)")
+    print("  [OK] MR summer cols = SR-checkbox OR _SummerList (coalesced, sort-safe)")
     return pos
 
 

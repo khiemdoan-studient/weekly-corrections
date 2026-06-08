@@ -1,5 +1,21 @@
 # Changelog
 
+## [v2.9.11] - 2026-06-03
+
+Restore the ISR Student Roster "Summer School" checkbox as a live, sort-safe input (OR'd with the email-keyed `_SummerList`) across all 6 schools; add 4 AFMS students (purple).
+
+### Fixed (the reported "broken pipeline")
+- A manager saw no summer checkboxes on the ISR SR yet TRUE flags on the CMR. Root cause: v2.9.5 had DECOUPLED the SR checkbox (cleared it; the MR flag became an email-keyed `_SummerList` lookup) after the JRES sort-incident, so checking an SR box did nothing. Restored it:
+  - `provision_sr`: no longer clears the summer columns; adds BOOLEAN (checkbox) data-validation on "Summer School". The column is inside each school's sortable Table (verified all 6), so a checked box travels with its row on sort.
+  - `provision_mr`: each summer column now COALESCES the row's own SR cell with the email-keyed `_SummerList` lookup. flag = (SR checkbox) OR (email in `_SummerList`); each detail = the SR cell if filled, else `_SummerList` VLOOKUP.
+- Verified live: checking a non-summer AFMS student's SR box flipped the MR flag to TRUE (flows to CMR + roster); unchecking flipped it back. Existing `_SummerList` students still flag TRUE (no regression: the SR is blank today, so behavior is unchanged until a box is checked).
+
+### Operational (live data, not committed)
+- Added 4 AFMS students a manager had typed manually at the bottom of the roster (teacher Jessica Grant; grades 6-7; subjects mapped to Language/Math) to the AFMS `_SummerList` and marked them PURPLE; the 4 manual static rows were removed by the rebuild. AFMS `_SummerList` 30 -> 34; combined roster 495 -> 499; `_Highlight` 95 red + 10 purple.
+
+### Files changed
+- `setup_summer_school_columns.py` (provision_sr + provision_mr), `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`.
+
 ## [v2.9.10] - 2026-06-03
 
 Add a second highlight color (purple) to the combined Summer School Roster, and add 6 AFMS students marked with it.
