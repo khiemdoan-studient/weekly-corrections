@@ -1,5 +1,19 @@
 # Changelog
 
+## [v2.9.12] - 2026-06-09
+
+Backfill all 499 ISR "Summer School" checkboxes and make the SR the sole source of truth (empty `_SummerList`), so checking/unchecking the ISR box adds/removes a student end-to-end (ISR -> IMR -> CMR).
+
+### Changed (operating model: the SR checkbox is now the source)
+- The 499 currently-flagged students were flagged via `_SummerList` only (the SR checkboxes were all blank). Backfilled every one: set the SR "Summer School" box TRUE and copied grade/subjects/teacher/teacher_email from `_SummerList` into that student's SR summer cells, matched by email (100% SR coverage). Then EMPTIED `_SummerList` (A2:E, all 6 schools). The MR coalesce formula is unchanged (flag = SR checkbox OR `_SummerList`), so with `_SummerList` empty the flag is now driven purely by the SR checkbox: check = add, UNCHECK = remove. `_SummerList` stays as an optional bulk/programmatic override (OR'd in), empty by default.
+
+### Verified (staged, live)
+- Staged backfill -> verify -> clear -> verify, with `_SummerList` held in memory for restore-on-drop (never needed). After backfill: SR checked = 123/25/140/34/24/153 = 499; MR-TRUE = 499. After clearing `_SummerList`: MR-TRUE STILL 499 (proving the SR checkbox alone drives the flag). Sample SR cells (one AFMS student) = `TRUE, <teacher_email>, <teacher>, 7, Language`. Combined "Summer School Roster" = 499 intact (AFMS 34, JHMS 123, JRES 24, JRHS 140, AFES 153, JHES 25); `_Highlight` = 95 red + 10 purple = 105.
+- LIVE UNCHECK test (the new behavior): a flagged student's MR flag = TRUE -> uncheck the SR box -> MR flag FALSE (removed, because `_SummerList` is empty) -> re-check -> TRUE. Snapshot/restored.
+
+### Files changed
+- `docs/CHANGELOG.md`, `docs/AI_INSTRUCTIONS.md`. The SR backfill + `_SummerList` clear are live student data (PII, not committed); no pipeline code changed (the v2.9.11 coalesce formula already reads the SR checkbox).
+
 ## [v2.9.11] - 2026-06-03
 
 Restore the ISR Student Roster "Summer School" checkbox as a live, sort-safe input (OR'd with the email-keyed `_SummerList`) across all 6 schools; add 4 AFMS students (purple).
