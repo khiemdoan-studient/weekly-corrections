@@ -1,5 +1,21 @@
 # Changelog
 
+## [v2.9.13] - 2026-06-15
+
+Add AASP (Allendale Aspire Academy) to the summer-school roster pipeline. The AASP ISR already had 5 students checked off for Summer School (each with a teacher: Morgan x4, Jessica Grant x1, plus grade), but AASP was never wired into the pipeline, so those rows never reached the combined "Summer School Roster" tab or the Timeback summer dashboard.
+
+### Changed
+- `setup_summer_school_columns.py`: added `"Allendale Aspire Academy (Dash)"` to `SUMMER_TABS` (now 7 schools). AASP was already in `config.py` `CAMPUS_SHEETS` + `ISR_CONFIG` (isr_id `10H5y0Z3...`), so no other config change.
+- Ran `python setup_summer_school_columns.py`: provisioned the AASP ISR (`_SummerList`, SR "Summer School" checkbox at col AC, MR ARRAYFORMULA coalesce), wrote the AASP CMR IMPORTRANGE (cols AE..AI), and rebuilt the combined "Summer School Roster" QUERY to include AASP. Idempotent re-run of the other 6 (find-or-append by header, no shift).
+
+### Verified (live)
+- AASP CMR summer cols: no `#REF!` (IMPORTRANGE auth already granted via the existing unenroll imports from the same ISR); 5 TRUE flags in col AE.
+- "Summer School Roster" tab: 392 rows (was 387), with all 5 AASP students present and teachers intact: Lamar Adkins / Antoine Clark / Ezekiel Osborn / Damarion Youmans (Morgan), Jayden Johnson (Jessica Grant).
+- No checkbox edits were needed: the 5 were already checked off on the AASP ISR (the SR checkbox is the source of truth since v2.9.12). The Timeback summer dashboard picks them up on its next `--rebuild-cache`.
+
+### Files changed
+- `setup_summer_school_columns.py`, `docs/CHANGELOG.md`.
+
 ## [v2.9.12] - 2026-06-09
 
 Backfill all 499 ISR "Summer School" checkboxes and make the SR the sole source of truth (empty `_SummerList`), so checking/unchecking the ISR box adds/removes a student end-to-end (ISR -> IMR -> CMR).

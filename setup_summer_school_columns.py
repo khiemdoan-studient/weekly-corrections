@@ -50,6 +50,7 @@ SUMMER_TABS = [
     "Allendale Fairfax Middle School (Dash)",  # v2.9.1
     "Ridgeland Elementary School (Dash)",  # v2.9.2
     "Allendale Fairfax Elementary School (Dash)",  # v2.9.3
+    "Allendale Aspire Academy (Dash)",  # v2.9.13
 ]
 
 SR_TAB = "Student Roster"
