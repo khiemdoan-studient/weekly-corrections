@@ -255,7 +255,7 @@ def set_plain_number(sheets, ssid, sheet_id, col_idx, row_count):
 
 def provision_summer_list(sheets, isr_id):
     """Ensure the hidden `_SummerList` helper tab exists with headers. This tab
-    (student_id, grade, subjects, teacher_email, teacher) is the durable, sort-proof
+    (email, grade, subjects, teacher_email, teacher) is the durable, sort-proof
     source for the summer flag: the MR looks students up here by email, so
     reordering the Student Roster can never misalign the flag. Populated per school
     by the one-time reconcile loader."""
@@ -303,7 +303,7 @@ def provision_summer_list(sheets, isr_id):
         .execute(),
         label="write _SummerList headers",
     )
-    print(f"  [OK] {SUMMER_LIST_TAB} ready (student_id-keyed summer source)")
+    print(f"  [OK] {SUMMER_LIST_TAB} ready (email-keyed summer source)")
 
 
 def provision_sr(sheets, isr_id):
