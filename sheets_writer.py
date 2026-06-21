@@ -584,10 +584,10 @@ def _migrate_cumulative_tabs(sheets_service, spreadsheet_id):
         if not rows:
             continue
 
-        # Quick skip: if every row has email at index 7, no migration needed.
+        # Quick skip: if every row has an email (any domain) at index 7, no migration needed.
         # (Sheets API strips trailing empty strings, so len<14 is normal post-migration.)
         all_aligned = all(
-            len(r) > 7 and isinstance(r[7], str) and "2hourlearning" in r[7].lower()
+            len(r) > 7 and isinstance(r[7], str) and "@" in r[7]
             for r in rows
         )
         if all_aligned:
@@ -634,15 +634,20 @@ def _realign_row(row):
     TARGET_EMAIL_IDX = 7
     TARGET_COLS = 14
 
-    # Find student email index (contains "2hourlearning")
+    # Find student email index — prefer @2hourlearning, fall back to any @-address.
     email_idx = None
+    fallback_email_idx = None
     for i, val in enumerate(row):
         if isinstance(val, str) and "2hourlearning" in val.lower():
             email_idx = i
             break
+        if fallback_email_idx is None and isinstance(val, str) and "@" in val:
+            fallback_email_idx = i
+    if email_idx is None:
+        email_idx = fallback_email_idx
 
     if email_idx is None:
-        # No student email found — pad/truncate to 14 with blank MismatchSummary
+        # No email anchor found — pad/truncate to 14 with blank MismatchSummary
         if len(row) < 2:
             return [""] * TARGET_COLS
         result = [row[0], ""] + list(row[1:])

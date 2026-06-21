@@ -33,6 +33,7 @@ import argparse
 import csv
 import io
 import sys
+import urllib.parse
 
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession
@@ -104,7 +105,13 @@ def _rows_from_rev(session, rev, gid):
     link = (rev.get("exportLinks") or {}).get(ODS_MIME)
     if not link:
         raise ValueError(f"revision {rev['id']} has no ODS export link")
-    url = link.replace("exportFormat=ods", "exportFormat=csv") + f"&gid={gid}"
+    _parsed = urllib.parse.urlparse(link)
+    _qs = urllib.parse.parse_qs(_parsed.query, keep_blank_values=True)
+    _qs["exportFormat"] = ["csv"]
+    _qs["gid"] = [str(gid)]
+    url = urllib.parse.urlunparse(
+        _parsed._replace(query=urllib.parse.urlencode(_qs, doseq=True))
+    )
     resp = session.get(url)
     resp.raise_for_status()
     rows = list(csv.reader(io.StringIO(resp.content.decode("utf-8", "ignore"))))

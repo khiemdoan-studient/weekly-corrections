@@ -986,29 +986,30 @@ def main(all_unsent=False, since_date=None, custom_name=None):
                 .execute(),
                 label=f"re-read {source_tab} student_ids for stamping",
             )
-            current_sid_to_row = {}
+            current_sid_to_rows = {}
             for i, sid_row in enumerate(sid_resp.get("values", []), start=1):
                 if sid_row and sid_row[0]:
-                    current_sid_to_row[str(sid_row[0]).strip()] = i
+                    sid_key = str(sid_row[0]).strip()
+                    current_sid_to_rows.setdefault(sid_key, []).append(i)
 
             for _orig_row_num, row in collected[weekly_tab]:
                 sid = str(row[SID_COL_INDEX] or "").strip()
-                if not sid or sid not in current_sid_to_row:
+                if not sid or sid not in current_sid_to_rows:
                     # Row was deleted/shifted by Apps Script between read and stamp.
                     # Skip silently — the row will be picked up next snapshot run if
                     # it still exists with blank Sent Week.
                     skipped += 1
                     continue
-                current_row_num = current_sid_to_row[sid]
                 # Only write if not already marked with this week's date
                 if str(row[SENT_WEEK_COL] or "").strip() != monday_iso:
-                    mark_data.append(
-                        {
-                            "range": f"'{source_tab}'!{col_letter}{current_row_num}",
-                            "values": [[monday_iso]],
-                        }
-                    )
-                    count += 1
+                    for current_row_num in current_sid_to_rows[sid]:
+                        mark_data.append(
+                            {
+                                "range": f"'{source_tab}'!{col_letter}{current_row_num}",
+                                "values": [[monday_iso]],
+                            }
+                        )
+                    count += len(current_sid_to_rows[sid])
             mark_counts[source_tab] = count
             skipped_deleted[source_tab] = skipped
 

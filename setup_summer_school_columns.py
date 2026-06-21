@@ -807,7 +807,7 @@ def build_summer_roster_tab(sheets):
 def main():
     start = time.time()
     print("=" * 70)
-    print("  SUMMER SCHOOL PROVISIONING (v2.9.5: _SummerList + MR student_id lookups)")
+    print("  SUMMER SCHOOL PROVISIONING (v2.9.11: SR-checkbox OR _SummerList coalesce (email-keyed))")
     print("=" * 70)
     sheets = build_sheets_service()
     for tab in SUMMER_TABS:

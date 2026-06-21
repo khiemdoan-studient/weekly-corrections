@@ -492,8 +492,14 @@ def compare_students(
         add_studentid_count += 1
 
     # ── Non-enrolled MAP students vs SIS (unenrolling detection) ──────
-    # Skip student_ids already processed in the enrolled loop to avoid double-counting
-    already_processed = {rec["Student_ID"] for rec in corrections_map}
+    # Skip student_ids already processed in the enrolled loop to avoid double-counting.
+    # NOTE: snapshot corrections_map BEFORE the email-only loop appended to it, so
+    # that SIS Student_IDs stamped onto email-only rows (which have blank MAP ids and
+    # therefore cannot appear in map_non_enrolled by definition of read_map_roster) do
+    # not accidentally suppress unenrolling detection for a non-enrolled MAP row whose
+    # id happens to equal that SIS id.  Build the set from map_enrolled keys instead
+    # of from corrections_map to make the scope explicit and future-proof.
+    already_processed = set(map_enrolled.keys())
     for student_id, map_rec in sorted(map_non_enrolled.items()):
         if student_id in map_enrolled or student_id in already_processed:
             print(
